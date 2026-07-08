@@ -1,34 +1,28 @@
 """Functional GAS-GARCH model estimators using B-spline basis projections."""
 
+import warnings
 import typing
+
 import numpy as np
-import pandas as pd
-from typing import Any
 from scipy.special import gammaln
 
 from .basis import cubic_bspline_basis, ou_kernel
-from .utils import ResultContainer
 
-import warnings
 warnings.filterwarnings(action='ignore')
 
-_KT = typing.TypeVar('_KT')
-_VT = typing.TypeVar('_VT')
 
-
-class _Counter:
+class _CallCounter:
     count: int = 0
 
 
-_COUNT = _Counter
+_COUNT = _CallCounter()
 
 
-def _log_step(name: str, counter: type, log_loss: float, log_every: int = 1) -> None:
+def _log_step(name: str, counter: _CallCounter, log_loss: float, log_every: int = 1) -> None:
     """Print a convergence update for the GAS optimiser."""
-    count = counter.count
-    if count % log_every == 0:
-        s = f'Running {name} :: call #{count:<5} :: loss: {np.round(log_loss, 6)}'
-        print(s.ljust(len(s) + 30, ' '), end='\r')
+    if counter.count % log_every == 0:
+        msg = f'Running {name} :: call #{counter.count:<5} :: loss: {log_loss:.6f}'
+        print(msg.ljust(len(msg) + 30, ' '), end='\r')
 
 
 def gas_garch_estimator(
@@ -49,44 +43,42 @@ def gas_garch_estimator(
 
     Args:
         mY: Return matrix, shape (n, T). Rows are intraday times, columns are days.
-        vb_ini: Initial B-spline score vector, shape (dK+1, 1).
+        vb_ini: Initial B-spline coefficient vector, shape (dK+1, 1).
         dK: Number of B-spline basis functions minus one.
         n: Number of intraday grid points.
         basis_mat: B-spline basis matrix, shape (dK+1, n).
         vtheta: Parameter vector:
-            [nu, delta, omega (M), vec(B) (M²), vec(A) (M²)]
+            [nu, ou_scale, omega (M), vec(B) (M²), vec(A) (M²)]
             where M = dK + 1.
 
     Returns:
         Tuple of (negative average log-likelihood, fitted sigma matrix of shape (n, T)).
     """
     T = mY.shape[1]
-    nu    = vtheta[0]
-    d_ou  = vtheta[1]
-    M     = dK + 1
+    nu       = vtheta[0]
+    ou_scale = vtheta[1]
+    M        = dK + 1
 
     omega = np.array(vtheta[2: M + 2]).reshape((M, 1))
     mB    = np.array(vtheta[M + 2: M + 2 + M ** 2]).reshape((M, M))
     mA    = np.array(vtheta[-(M ** 2):]).reshape((M, M))
 
-    cov_mat = ou_kernel(np.linspace(0, 1, mY.shape[0]), delta=d_ou)
+    cov_mat = ou_kernel(np.linspace(0, 1, mY.shape[0]), delta=ou_scale)
     cov_inv = np.linalg.inv(cov_mat)
 
-    vb_now  = vb_ini.copy()
-    vy_now  = mY[:, 0].copy().reshape((n, 1))
+    vb_now    = vb_ini.copy()
+    vy_now    = mY[:, 0].copy().reshape((n, 1))
     sigma_mat = np.zeros(mY.shape)
     log_lik   = 0.0
-    temp1     = (nu + n) / (2 * nu)
+    nu_scale  = (nu + n) / (2 * nu)
 
     for t in range(1, T):
-        sigma_now = np.zeros((n, 1))
-        for i in range(n):
-            sigma_now[i]      = basis_mat[:, i] @ vb_now
-            sigma_mat[:, t][i] = sigma_now[i]
+        sigma_now = basis_mat.T @ vb_now  # (n, 1)
+        sigma_mat[:, t] = sigma_now[:, 0]
 
-        Y = vy_now
-        S = np.exp(sigma_now / 2)
-        R = np.eye(n) / np.exp(sigma_now / 2)
+        Y  = vy_now
+        S  = np.exp(sigma_now / 2)
+        R  = np.eye(n) / S
 
         A1 = float(np.sum(1 + (Y.T @ (R @ (cov_inv @ (R @ Y)))) / nu))
         A2 = (Y / S).T * basis_mat
@@ -95,9 +87,9 @@ def gas_garch_estimator(
         if t > 5:
             log_lik += -0.5 * float(np.sum(sigma_now)) - ((n + nu) / 2) * np.log(A1)
 
-        score = np.array(
+        score  = np.array(
             -0.5 * (basis_mat @ np.ones(n)).reshape((dK + 1, 1))
-            + (temp1 / A1) * A3
+            + (nu_scale / A1) * A3
         )
         vb_now = omega + mB @ vb_now + mA @ score
         vy_now = mY[:, t].reshape((n, 1))
@@ -114,7 +106,7 @@ def gas_garch_estimator(
 
 
 def func_garch_estimator(
-    mY: pd.DataFrame | Any,
+    mY: np.ndarray,
     basis_splines: np.ndarray,
     vtheta: np.ndarray,
     M: int,
@@ -142,7 +134,7 @@ def func_garch_estimator(
         raise NotImplementedError('Order (p,q) must be (1,1)')
 
     N, T = mY.shape
-    coefs_delta = np.matrix(vtheta[:M])
+    coefs_delta = np.array(vtheta[:M]).reshape(1, M)
     coefs_alpha = vtheta[M: M + M ** 2].reshape((M, M))
     coefs_beta  = vtheta[M + M ** 2:].reshape((M, M))
 
@@ -150,17 +142,17 @@ def func_garch_estimator(
     vsigma2_mat = np.zeros(mY.shape)
     vsigma2_mat[:, 0] = vsigma2
 
-    delta_hat = coefs_delta @ basis_splines                       # (1, N)
-    alpha_hat = basis_splines.T @ (coefs_alpha @ basis_splines)  # (N, N)
-    beta_hat  = basis_splines.T @ (coefs_beta  @ basis_splines)  # (N, N)
+    delta_hat = coefs_delta @ basis_splines                        # (1, N)
+    alpha_hat = basis_splines.T @ (coefs_alpha @ basis_splines)   # (N, N)
+    beta_hat  = basis_splines.T @ (coefs_beta  @ basis_splines)   # (N, N)
 
     loss = 0.0
     for t in range(1, T):
-        vsigma2 = np.array(
+        vsigma2 = np.asarray(
             delta_hat
             + (alpha_hat * mY[:, t - 1] ** 2) @ np.ones(N) / N
             + (vsigma2 @ beta_hat) / N
-        )[0]
+        ).ravel()
         vsigma2_mat[:, t] = vsigma2
         loss += float(np.sum(((mY[:, t] ** 2 - vsigma2) * basis_splines) ** 2))
 

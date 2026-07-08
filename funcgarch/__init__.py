@@ -4,12 +4,12 @@ Public API
 ----------
 Basis functions:
     bernstein_basis       Bernstein polynomial basis function (JIT-compiled).
-    cubic_bspline_basis   Cubic B-spline basis matrix.
+    cubic_bspline_basis   B-spline basis matrix.
     ou_kernel             Ornstein-Uhlenbeck covariance kernel.
 
 Functional GARCH:
-    delta                 Level operator.
-    functional_operator   Kernel operator (double Bernstein sum).
+    delta                 Level operator (Bernstein expansion of δ).
+    kernel_operator       Kernel operator (double Bernstein sum for α/β).
     loss_func             Bernstein-projected MSE loss.
     garch_filter          Extract conditional variance surface from returns.
     garch_estimator       Compute loss for a given parameter vector.
@@ -28,7 +28,14 @@ Utilities:
 """
 
 from .basis import bernstein_basis, cubic_bspline_basis, ou_kernel
-from .garch import delta, functional_operator, loss_func, garch_filter, garch_estimator, fit
+from .garch import (
+    delta,
+    kernel_operator,
+    loss_func,
+    garch_filter,
+    garch_estimator,
+    fit,
+)
 from .gas import gas_garch_estimator, func_garch_estimator
 from .simulate import brownian, simulate
 from .utils import ResultContainer
@@ -38,7 +45,7 @@ __all__ = [
     'cubic_bspline_basis',
     'ou_kernel',
     'delta',
-    'functional_operator',
+    'kernel_operator',
     'loss_func',
     'garch_filter',
     'garch_estimator',

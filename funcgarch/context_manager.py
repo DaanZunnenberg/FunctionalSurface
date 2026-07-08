@@ -4,16 +4,7 @@ import importlib
 import logging
 import sys
 
-logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger(__name__)
-
-
-def _on_init(module) -> None:
-    print(f'Initialised: {module.__name__}')
-
-
-def _on_cleanup(module) -> None:
-    print(f'Cleaned up: {module.__name__}')
 
 
 class ImportContextManager:

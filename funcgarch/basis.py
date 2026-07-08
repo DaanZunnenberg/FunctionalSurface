@@ -32,26 +32,24 @@ def bernstein_basis(u: typing.Any, M: int, k: int) -> float:
 
 def cubic_bspline_basis(
     x: np.ndarray,
-    k: int,
+    order: int,
     n_interior_knots: int,
     create_constant: bool = True,
 ) -> np.ndarray:
-    """Evaluate cubic B-spline basis functions on grid x.
+    """Evaluate B-spline basis functions on grid x.
 
     Args:
         x: Evaluation grid in [0, 1].
-        k: Spline order.
+        order: Spline order (e.g. 4 for cubic splines).
         n_interior_knots: Number of interior knots.
         create_constant: If True, prepend an intercept column of ones.
 
     Returns:
         Array of shape (n_basis, len(x)).
     """
-    knots = np.concatenate(([0] * k, np.linspace(0, 1, n_interior_knots), [1] * k))
-    basis_fns = [
-        BSpline(knots, np.eye(len(knots) - k - 1)[i], k)
-        for i in range(len(knots) - k - 1)
-    ]
+    knots = np.concatenate(([0] * order, np.linspace(0, 1, n_interior_knots), [1] * order))
+    n_basis = len(knots) - order - 1
+    basis_fns = [BSpline(knots, np.eye(n_basis)[i], order) for i in range(n_basis)]
     if create_constant:
         return np.array([[1.0] * x.size] + [b(x) for b in basis_fns])
     return np.array([b(x) for b in basis_fns])

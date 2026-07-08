@@ -1,11 +1,9 @@
-import typing
+"""Shared utilities for the funcgarch package."""
 
 __all__ = ['ResultContainer']
 
-_PURP: str = '\033[95m'
-_WHIT: str = '\033[0m'
-_KT = typing.TypeVar('_KT')
-_VT = typing.TypeVar('_VT')
+_ANSI_PURPLE: str = '\033[95m'
+_ANSI_RESET:  str = '\033[0m'
 
 
 class ResultContainer:
@@ -22,14 +20,16 @@ class ResultContainer:
         return self.__repr__()
 
     def __repr__(self) -> str:
-        lines = ''
+        lines = []
         for key, val in self.__dict__.items():
-            lines += f'@Self[{type(val)} @ {_PURP}0x{id(val)}{_WHIT}]: ({key}, {val})\n'
-        return lines
+            addr = f'{_ANSI_PURPLE}0x{id(val):x}{_ANSI_RESET}'
+            lines.append(f'{key}: [{type(val).__name__} @ {addr}] = {val!r}')
+        return '\n'.join(lines)
 
 
 if __name__ == '__main__':
-    import scipy
+    import scipy.optimize
+
     fun = lambda x: (x[0] - 1) ** 2 + (x[1] - 2.5) ** 2
     cons = (
         {'type': 'ineq', 'fun': lambda x:  x[0] - 2 * x[1] + 2},
