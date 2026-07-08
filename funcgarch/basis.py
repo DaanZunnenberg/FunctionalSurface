@@ -9,7 +9,7 @@ This module provides the three basis-related primitives used across the package:
 
 ``cubic_bspline_basis``
     B-spline basis matrix Φ of shape (M, N), used in ``gas.py`` to
-    parametrise the log-volatility curve as log σ_t(u) = Φ(u)ᵀ b_t.
+    parametrise the log-volatility curve as log sigma_t(u) = Phi(u)^T b_t.
 
 ``ou_kernel``
     Ornstein-Uhlenbeck covariance matrix Λ_δ of shape (N, N), used in
@@ -21,6 +21,8 @@ This module has no internal package dependencies.  It is imported by
 ``garch.py`` (via ``bernstein_basis``) and ``gas.py`` (via
 ``cubic_bspline_basis`` and ``ou_kernel``).
 """
+
+from __future__ import annotations
 
 import typing
 import numpy as np

@@ -5,7 +5,7 @@ Module role
 Provides two estimators for functional volatility models that parametrise the
 log-volatility curve with a B-spline basis Φ:
 
-    log σ_t(u) = Φ(u)ᵀ b_t
+    log sigma_t(u) = Phi(u)^T b_t
 
 ``gas_garch_estimator``
     The full GAS model.  The coefficient vector b_t is updated at each day by

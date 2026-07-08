@@ -15,7 +15,7 @@ Estimation::
 
     fit()
       └─▶ garch_estimator()        # called once per scipy optimizer step
-            ├─▶ _build_operators() # unpacks vtheta → δ̂, α̂, β̂  (N×N matrices)
+            ├─▶ _build_operators() # unpacks vtheta -> delta_hat, alpha_hat, beta_hat  (N×N matrices)
             └─▶ loss_func()        # Bernstein-projected MSE, accumulated per day
 
 Post-estimation::
@@ -36,6 +36,8 @@ Imported by
   callables for the simulation GARCH recursion.
 - ``__init__.py`` — re-exports the public API.
 """
+
+from __future__ import annotations
 
 import warnings
 import typing

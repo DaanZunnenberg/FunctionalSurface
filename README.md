@@ -227,7 +227,7 @@ result    = minimize(objective, vtheta0, bounds=list(zip(LB, UB)), method='SLSQP
 python examples/gas_vol_surface.py
 ```
 
-The script uses `cubic_bspline_basis` and `ou_kernel` from the package and implements the **diagonal** score update `bₜ = ω + b⊙bₜ₋₁ + a⊙sₜ₋₁` (vectors b, a), which is the version used in `func_garch_gas.ipynb`.  The full matrix version (M×M matrices B, A) is in `gas_garch_estimator` in `gas.py`.
+The script uses `cubic_bspline_basis` and `ou_kernel` from the package and implements the **diagonal** score update `b_t = omega + b(*) b_{t-1} + a(*) s_{t-1}` (vectors b, a with element-wise multiplication), which is the version used in `func_garch_gas.ipynb`.  The full matrix version (M×M matrices B, A) is in `gas_garch_estimator` in `gas.py`.
 
 ---
 
@@ -238,7 +238,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Python ≥ 3.10 required. Run the test suite with:
+Python >= 3.10 required. Run the test suite with:
 
 ```bash
 pytest tests/
