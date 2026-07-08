@@ -1,0 +1,169 @@
+"""Functional GAS-GARCH model estimators using B-spline basis projections."""
+
+import typing
+import numpy as np
+import pandas as pd
+from typing import Any
+from scipy.special import gammaln
+
+from .basis import cubic_bspline_basis, ou_kernel
+from .utils import ResultContainer
+
+import warnings
+warnings.filterwarnings(action='ignore')
+
+_KT = typing.TypeVar('_KT')
+_VT = typing.TypeVar('_VT')
+
+
+class _Counter:
+    count: int = 0
+
+
+_COUNT = _Counter
+
+
+def _log_step(name: str, counter: type, log_loss: float, log_every: int = 1) -> None:
+    """Print a convergence update for the GAS optimiser."""
+    count = counter.count
+    if count % log_every == 0:
+        s = f'Running {name} :: call #{count:<5} :: loss: {np.round(log_loss, 6)}'
+        print(s.ljust(len(s) + 30, ' '), end='\r')
+
+
+def gas_garch_estimator(
+    mY: np.ndarray,
+    vb_ini: np.ndarray,
+    dK: int,
+    n: int,
+    basis_mat: np.ndarray,
+    vtheta: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    """Functional GAS-GARCH log-likelihood and fitted volatility surface.
+
+    Implements the score-driven update for the B-spline coefficient vector b_t:
+        b_t = omega + B @ b_{t-1} + A @ score_t
+
+    where the score is derived from the multivariate Student-t log-likelihood
+    with OU-structured covariance.
+
+    Args:
+        mY: Return matrix, shape (n, T). Rows are intraday times, columns are days.
+        vb_ini: Initial B-spline score vector, shape (dK+1, 1).
+        dK: Number of B-spline basis functions minus one.
+        n: Number of intraday grid points.
+        basis_mat: B-spline basis matrix, shape (dK+1, n).
+        vtheta: Parameter vector:
+            [nu, delta, omega (M), vec(B) (M²), vec(A) (M²)]
+            where M = dK + 1.
+
+    Returns:
+        Tuple of (negative average log-likelihood, fitted sigma matrix of shape (n, T)).
+    """
+    T = mY.shape[1]
+    nu    = vtheta[0]
+    d_ou  = vtheta[1]
+    M     = dK + 1
+
+    omega = np.array(vtheta[2: M + 2]).reshape((M, 1))
+    mB    = np.array(vtheta[M + 2: M + 2 + M ** 2]).reshape((M, M))
+    mA    = np.array(vtheta[-(M ** 2):]).reshape((M, M))
+
+    cov_mat = ou_kernel(np.linspace(0, 1, mY.shape[0]), delta=d_ou)
+    cov_inv = np.linalg.inv(cov_mat)
+
+    vb_now  = vb_ini.copy()
+    vy_now  = mY[:, 0].copy().reshape((n, 1))
+    sigma_mat = np.zeros(mY.shape)
+    log_lik   = 0.0
+    temp1     = (nu + n) / (2 * nu)
+
+    for t in range(1, T):
+        sigma_now = np.zeros((n, 1))
+        for i in range(n):
+            sigma_now[i]      = basis_mat[:, i] @ vb_now
+            sigma_mat[:, t][i] = sigma_now[i]
+
+        Y = vy_now
+        S = np.exp(sigma_now / 2)
+        R = np.eye(n) / np.exp(sigma_now / 2)
+
+        A1 = float(np.sum(1 + (Y.T @ (R @ (cov_inv @ (R @ Y)))) / nu))
+        A2 = (Y / S).T * basis_mat
+        A3 = A2 @ (cov_inv @ (R @ Y))
+
+        if t > 5:
+            log_lik += -0.5 * float(np.sum(sigma_now)) - ((n + nu) / 2) * np.log(A1)
+
+        score = np.array(
+            -0.5 * (basis_mat @ np.ones(n)).reshape((dK + 1, 1))
+            + (temp1 / A1) * A3
+        )
+        vb_now = omega + mB @ vb_now + mA @ score
+        vy_now = mY[:, t].reshape((n, 1))
+
+    log_lik += T * (
+        gammaln((nu + n) / 2)
+        - gammaln(nu / 2)
+        - (n / 2) * np.log(np.pi * nu)
+        - 0.5 * np.log(np.linalg.det(cov_mat))
+    )
+    _log_step('GAS estimator', _COUNT, -log_lik / T)
+    _COUNT.count += 1
+    return -log_lik / T, sigma_mat
+
+
+def func_garch_estimator(
+    mY: pd.DataFrame | Any,
+    basis_splines: np.ndarray,
+    vtheta: np.ndarray,
+    M: int,
+    p: int = 1,
+    q: int = 1,
+) -> tuple[float, np.ndarray]:
+    """Functional GARCH estimator using B-spline basis projections.
+
+    Implements the functional GARCH(1,1) recursion in the B-spline coefficient
+    space. The conditional variance operator is:
+        sigma²_t = B^T delta + (B^T A B) * y²_{t-1} + sigma²_{t-1} (B^T C B)
+
+    Args:
+        mY: Return matrix, shape (N, T). Rows are intraday times, columns are days.
+        basis_splines: B-spline basis matrix, shape (M, N).
+        vtheta: Parameter vector [delta_coefs (M) | vec(alpha) (M²) | vec(beta) (M²)].
+        M: Number of B-spline basis functions.
+        p: AR order (currently only p=1 supported).
+        q: MA order (currently only q=1 supported).
+
+    Returns:
+        Tuple of (MSE loss, fitted variance matrix of shape (N, T)).
+    """
+    if max(p, q) > 1:
+        raise NotImplementedError('Order (p,q) must be (1,1)')
+
+    N, T = mY.shape
+    coefs_delta = np.matrix(vtheta[:M])
+    coefs_alpha = vtheta[M: M + M ** 2].reshape((M, M))
+    coefs_beta  = vtheta[M + M ** 2:].reshape((M, M))
+
+    vsigma2     = np.ones(N)
+    vsigma2_mat = np.zeros(mY.shape)
+    vsigma2_mat[:, 0] = vsigma2
+
+    delta_hat = coefs_delta @ basis_splines                       # (1, N)
+    alpha_hat = basis_splines.T @ (coefs_alpha @ basis_splines)  # (N, N)
+    beta_hat  = basis_splines.T @ (coefs_beta  @ basis_splines)  # (N, N)
+
+    loss = 0.0
+    for t in range(1, T):
+        vsigma2 = np.array(
+            delta_hat
+            + (alpha_hat * mY[:, t - 1] ** 2) @ np.ones(N) / N
+            + (vsigma2 @ beta_hat) / N
+        )[0]
+        vsigma2_mat[:, t] = vsigma2
+        loss += float(np.sum(((mY[:, t] ** 2 - vsigma2) * basis_splines) ** 2))
+
+    _log_step('GARCH estimator', _COUNT, loss)
+    _COUNT.count += 1
+    return loss, vsigma2_mat
