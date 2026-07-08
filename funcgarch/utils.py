@@ -1,4 +1,15 @@
-"""Shared utilities for the funcgarch package."""
+"""Lightweight utilities shared across the package.
+
+Contents
+────────
+``ResultContainer``
+    A simple key-value bag that exposes the fields of a ``scipy.optimize.
+    OptimizeResult`` as attributes (``result.x``, ``result.fun``,
+    ``result.success``, …).  Returned by ``garch.fit()``; not used by the
+    GAS model, which has no ``fit()`` wrapper.
+
+This module has no internal package dependencies.
+"""
 
 __all__ = ['ResultContainer']
 

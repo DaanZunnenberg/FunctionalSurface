@@ -1,4 +1,25 @@
-"""Simulation utilities for the functional GARCH model."""
+"""Simulation utilities for the functional GARCH model.
+
+Module role
+───────────
+Generates synthetic (mY, vsigma2_mat) pairs from a functional GARCH(1,1)
+process.  Used for Monte Carlo studies and to verify that ``fit()`` recovers
+known parameters.
+
+The GARCH recursion here is identical to the one in ``garch_estimator()``, so
+any ``coefs`` vector valid for ``fit()`` can be passed directly to
+``simulate()``.
+
+The intraday noise at each time step is constructed as cumulative scaled
+Brownian increments (``_brownian_noise``), driven by the function
+``brownian(t) = 2^{400t} / ln 2``.
+
+Dependencies
+────────────
+- ``garch.py`` — imports ``delta`` and ``kernel_operator`` as the default
+  level and kernel callables.  An alternative basis pair can be injected via
+  ``delta_fn`` / ``kernel_fn``.
+"""
 
 import warnings
 import typing

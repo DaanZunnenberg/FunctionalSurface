@@ -1,4 +1,36 @@
-"""Functional GAS-GARCH model estimators using B-spline basis projections."""
+"""Functional GAS-GARCH model — B-spline parametrisation.
+
+Module role
+───────────
+Provides two estimators for functional volatility models that parametrise the
+log-volatility curve with a B-spline basis Φ:
+
+    log σ_t(u) = Φ(u)ᵀ b_t
+
+``gas_garch_estimator``
+    The full GAS model.  The coefficient vector b_t is updated at each day by
+    the scaled score of the multivariate Student-t log-likelihood:
+
+        b_t = ω + B b_{t-1} + A s_{t-1}
+
+    Returns the negative average log-likelihood and the fitted log-volatility
+    surface.
+
+``func_garch_estimator``
+    A B-spline GARCH baseline (no score updating).  The variance is evolved
+    through the same GARCH(1,1) recursion as in ``garch.py``, but using
+    B-spline basis matrices instead of Bernstein polynomials.  Useful as a
+    performance baseline.
+
+Both estimators are called directly inside a ``scipy.optimize.minimize`` loop
+(there is no ``fit()`` wrapper).  See ``examples/`` for worked demonstrations.
+
+Dependencies
+────────────
+- ``basis.py`` — ``cubic_bspline_basis`` builds the basis matrix Φ that both
+  estimators expect as input; ``ou_kernel`` builds the OU covariance Λ_δ used
+  in the GAS likelihood.
+"""
 
 import warnings
 import typing

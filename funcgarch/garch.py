@@ -1,4 +1,41 @@
-"""Functional GARCH model: operators, loss, estimator, and volatility filter."""
+"""Functional GARCH model — Bernstein-basis parametrisation.
+
+Module role
+───────────
+Implements the complete estimation and filtering pipeline for the functional
+GARCH(1,1) model.  The conditional variance curve σ²_t(·) is approximated in
+the M-dimensional Bernstein polynomial basis and evolved through an
+operator-valued GARCH recursion:
+
+    σ²_t(u) = δ(u) + ∫α(u,s) r²_{t-1}(s) ds + ∫β(u,s) σ²_{t-1}(s) ds
+
+Call chain
+──────────
+Estimation::
+
+    fit()
+      └─▶ garch_estimator()        # called once per scipy optimizer step
+            ├─▶ _build_operators() # unpacks vtheta → δ̂, α̂, β̂  (N×N matrices)
+            └─▶ loss_func()        # Bernstein-projected MSE, accumulated per day
+
+Post-estimation::
+
+    garch_filter()                 # same GARCH recursion as garch_estimator,
+      └─▶ _build_operators()       # but returns the full (N, T) variance surface
+
+Dependencies
+────────────
+- ``basis.py`` — ``bernstein_basis`` is used inside ``delta`` and
+  ``kernel_operator`` (both JIT-compiled here).
+- ``utils.py`` — ``ResultContainer`` wraps the scipy OptimizeResult returned
+  by ``fit()``.
+
+Imported by
+───────────
+- ``simulate.py`` — imports ``delta`` and ``kernel_operator`` as default
+  callables for the simulation GARCH recursion.
+- ``__init__.py`` — re-exports the public API.
+"""
 
 import warnings
 import typing
@@ -77,15 +114,25 @@ def loss_func(
     M: int,
     grid: np.ndarray,
 ) -> float:
-    """Bernstein-projected MSE between squared returns and conditional variance.
+    r"""Bernstein-projected MSE between squared returns and conditional variance.
 
-    $L = \sum_{k=1}^M \\mathbb{E}[(r^2 - \\sigma^2)^2 \\varphi_k^M]$
+    Computes the per-day loss
+
+    .. math::
+
+        L_t = \sum_{k=1}^{M}
+              \frac{1}{N}\sum_{i=1}^{N}
+              \bigl[(r_t(u_i)^2 - \sigma_t^2(u_i))\,\varphi_k^M(u_i)\bigr]^2
+
+    which approximates
+    :math:`\sum_k \bigl\|(r_t^2 - \sigma_t^2)\,\varphi_k^M\bigr\|_{L^2}^2`.
+    Summing over days gives the objective minimised by ``garch_estimator``.
 
     Args:
         returns: Intraday return vector for one day, shape (N,).
         sigma2: Conditional variance vector, shape (N,).
         M: Number of Bernstein basis functions.
-        grid: Evaluation grid, shape (N,).
+        grid: Intraday evaluation grid, shape (N,).
     """
     total = 0.0
     for k in range(1, M + 1):

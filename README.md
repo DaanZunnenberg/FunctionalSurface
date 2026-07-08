@@ -1,6 +1,6 @@
 # FuncGARCH
 
-Research code for **functional GARCH** and **functional GAS-GARCH** models applied to intraday volatility surfaces. The models treat the within-day return curve as a functional observation and extend classical GARCH/GAS dynamics to the function space.
+Research code for **functional GARCH** and **functional GAS-GARCH** models applied to intraday volatility surfaces. The models treat the within-day return curve as a functional observation and extend classical GARCH/GAS dynamics to function space.
 
 ---
 
@@ -32,7 +32,7 @@ The kernel operators and level function are approximated in a finite-dimensional
 
 $$\varphi_k^M(u) = \binom{M-1}{k-1} u^{k-1}(1-u)^{M-k}, \quad u \in [0,1]$$
 
-The parametrisation is:
+The basis satisfies $\sum_{k=1}^M \varphi_k^M(u) = 1$ (partition of unity) and $\varphi_k^M(u) \geq 0$. The parametrisation is:
 
 $$\delta(u) = \sum_{k=1}^M c_k\,\varphi_k^M(u), \qquad \alpha(u,s) = \sum_{k=1}^M \sum_{l=1}^M a_{kl}\,\varphi_k^M(u)\,\varphi_l^M(s)$$
 
@@ -42,9 +42,9 @@ with an identical expansion for $\beta$. The full parameter vector is $\theta = 
 
 Parameters are estimated by minimising the **Bernstein-projected MSE**:
 
-$$\hat{\theta} = \arg\min_\theta \sum_{t=2}^T \sum_{k=1}^M \int_0^1 \left(r_t(u)^2 - \sigma_t^2(u;\theta)\right)^2 \varphi_k^M(u)\,du$$
+$$\hat{\theta} = \arg\min_\theta \sum_{t=2}^T \sum_{k=1}^M \left\|\left(r_t^2 - \sigma_t^2(\cdot\,;\theta)\right)\varphi_k^M\right\|_{L^2}^2$$
 
-Integrals are approximated on a uniform intraday grid of length $N$. Optimisation uses `scipy.minimize` with SLSQP.
+where $\|f\|_{L^2}^2 = \int_0^1 f(u)^2\,du$. This is equivalent to weighting the squared residual $(r_t^2 - \sigma_t^2)^2$ by $(\varphi_k^M)^2$ and integrating, approximated on a uniform intraday grid of length $N$. Optimisation uses `scipy.minimize` with SLSQP.
 
 ---
 
@@ -60,31 +60,33 @@ The coefficient vector evolves according to the GAS recursion:
 
 $$b_t = \omega + B\,b_{t-1} + A\,s_{t-1}$$
 
-where $s_{t-1}$ is the **scaled score** of the conditional log-likelihood with respect to $b_{t-1}$, and $(\omega, B, A)$ are $M$-dimensional and $M \times M$ parameter matrices.
+where $s_{t-1}$ is the **score** of the conditional log-likelihood with respect to $b_{t-1}$, and $(\omega, B, A)$ are $M$-dimensional and $M \times M$ parameter matrices.
 
 #### Likelihood
 
-The return vector $r_t \in \mathbb{R}^n$ is modelled as a multivariate Student-$t$ with $\nu$ degrees of freedom:
+The return vector $r_t \in \mathbb{R}^N$ is modelled as a multivariate Student-$t$ with $\nu$ degrees of freedom:
 
 $$r_t \mid \mathcal{F}_{t-1} \sim t_\nu\!\left(0,\, S_t \Lambda_\delta S_t\right)$$
 
-where $S_t = \mathrm{diag}(\exp(\sigma_t(u_i)/2))$ scales individual volatilities and $\Lambda_\delta$ is an **Ornstein-Uhlenbeck covariance kernel**:
+where $S_t = \mathrm{diag}(\exp(\sigma_t(u_i)/2))_{i=1}^N$ scales individual volatilities and $\Lambda_\delta$ is an **Ornstein-Uhlenbeck covariance kernel**:
 
 $$[\Lambda_\delta]_{ij} = \exp\!\left(-\frac{|u_i - u_j|}{\delta}\right)$$
 
 This captures the intraday autocorrelation structure with a single length-scale parameter $\delta$.
 
-#### Score Update
+#### Score
 
-The score contribution is:
+Let $\tilde{r}_t = S_t^{-1} r_t$ be the element-wise standardised returns and $A_1 = 1 + \tilde{r}_t^\top \Lambda_\delta^{-1} \tilde{r}_t\,/\,\nu$ the scalar quadratic form. The score of the log-likelihood with respect to $b_t$ is:
 
-$$s_t = -\frac{1}{2}\,\Phi\,\mathbf{1}_n + \frac{\nu + n}{2\nu} \cdot \frac{1}{A_1}\,\Phi\,(\Lambda_\delta^{-1} S_t^{-1} r_t)$$
+$$s_t = -\frac{1}{2}\,\Phi\,\mathbf{1}_N + \frac{\nu + N}{2\nu\,A_1}\,\Phi\,\bigl(\tilde{r}_t \odot \Lambda_\delta^{-1}\tilde{r}_t\bigr)$$
 
-where $A_1 = 1 + r_t^\top (S_t \Lambda_\delta S_t)^{-1} r_t\,/\,\nu$ is the scalar quadratic form. Parameters $(\nu, \delta, \omega, B, A)$ are estimated by maximising the average log-likelihood.
+where $\Phi = [\Phi(u_1)\;\cdots\;\Phi(u_N)]$ is the $(M \times N)$ basis matrix and $\odot$ denotes element-wise multiplication. Parameters $(\nu, \delta, \omega, B, A)$ are estimated by maximising the average log-likelihood.
 
 ---
 
 ## Repository Layout
+
+### File tree
 
 ```
 funcgarch/               Installable Python package
@@ -126,9 +128,45 @@ pyproject.toml
 requirements.txt
 ```
 
+### How the components connect
+
+**Data pipeline** — from raw market data to the input matrix `mY`:
+
+```
+WRDS database
+     │  (SAS scripts in wrds/)
+     ▼
+Raw TAQ exports (CSV)
+     │  scripts/taq_fetcher.ipynb fetches; scripts/taq_cleaner.py cleans
+     ▼
+mY : ndarray (N, T)   ← N intraday grid points, T trading days
+```
+
+**Model estimation** — from `mY` to fitted parameters:
+
+```
+mY
+ ├──▶ funcgarch/garch.py  ──  fit() → garch_filter()   [Bernstein GARCH]
+ └──▶ funcgarch/gas.py    ──  gas_garch_estimator()    [B-spline GAS-GARCH]
+
+examples/ notebooks demonstrate both paths end-to-end.
+```
+
+**Internal module dependencies** inside `funcgarch/`:
+
+```
+basis.py  ◀──── garch.py ◀──── simulate.py
+    ▲                ▲
+    └────── gas.py   └──────── utils.py   (ResultContainer)
+```
+
+`basis.py` has no internal dependencies and is the foundation everything else builds on.
+
 ---
 
 ## Quick Start
+
+### Functional GARCH
 
 ```python
 import numpy as np
@@ -140,8 +178,8 @@ M = 2  # number of Bernstein basis functions
 
 result = fit(
     mY,
-    sigma2_ini=np.ones(N),
-    grid_length=N,
+    sigma2_init=np.ones(N),
+    n_grid=N,
     M=M,
     x0=np.zeros(M + 2 * M**2),
     bounds=[(-.99, .99)] * (M + 2 * M**2),
@@ -149,10 +187,10 @@ result = fit(
 )
 
 theta_hat  = result.x
-sigma2_hat = garch_filter(mY, grid_length=N, vtheta=theta_hat, M=M, sigma2_ini=np.ones(N))
+sigma2_hat = garch_filter(mY, n_grid=N, vtheta=theta_hat, M=M, sigma2_init=np.ones(N))
 ```
 
-For the GAS-GARCH model:
+### Functional GAS-GARCH
 
 ```python
 import numpy as np
@@ -160,9 +198,9 @@ from funcgarch import gas_garch_estimator, cubic_bspline_basis
 from scipy.optimize import minimize
 
 dK = 7
-n  = mY.shape[0]
-vtau = np.linspace(0, 1, n)
-basis_mat = cubic_bspline_basis(vtau, k=dK - 2, n_interior_knots=3)  # (M, n)
+N  = mY.shape[0]
+vtau = np.linspace(0, 1, N)
+basis_mat = cubic_bspline_basis(vtau, order=dK - 2, n_interior_knots=3)  # (M, N)
 M = dK + 1
 
 vb0     = np.ones((M, 1))
@@ -170,7 +208,7 @@ vtheta0 = np.concatenate(([2.1, 0.001], np.ones(M), -0.5 * np.ones(M**2), 0.1 * 
 LB      = np.concatenate(([1.05, 1e-5], -5 * np.ones(M), -2 * np.ones(M**2), -0.9 * np.ones(M**2)))
 UB      = np.concatenate(([50,   1],    15 * np.ones(M),  2 * np.ones(M**2),  0.9 * np.ones(M**2)))
 
-objective = lambda vtheta: gas_garch_estimator(mY, vb0, dK, n, basis_mat, vtheta)[0]
+objective = lambda vtheta: gas_garch_estimator(mY, vb0, dK, N, basis_mat, vtheta)[0]
 result    = minimize(objective, vtheta0, bounds=list(zip(LB, UB)), method='SLSQP')
 ```
 
@@ -183,7 +221,11 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Python ≥ 3.10 required.
+Python ≥ 3.10 required. Run the test suite with:
+
+```bash
+pytest tests/
+```
 
 ---
 
