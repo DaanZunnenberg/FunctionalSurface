@@ -4,7 +4,7 @@ Requires: WRDS access. The Windows path resolver (_WindowsDownloadPath) uses
 ctypes.windll and is only available on Windows. On other platforms, supply
 parent_path explicitly to DataCleaner.clean().
 
-The DataCleaner class reads the output of the SAS scripts in sas_scripts/ and
+The DataCleaner class reads the output of the SAS scripts in wrds/ and
 produces a clean intraday return matrix ready for the funcgarch estimators.
 """
 
@@ -129,7 +129,7 @@ if _WINDOWS_AVAILABLE:
 class DataCleaner:
     """Clean TAQ CSV exports from WRDS SAS scripts into log-return matrices.
 
-    Reads a CSV file produced by the SAS pipeline in sas_scripts/, applies
+    Reads a CSV file produced by the SAS pipeline in wrds/, applies
     intraday resampling, and exposes `data` (raw prices) and
     `transformed_data` (log-return matrix ready for `funcgarch.fit`).
 

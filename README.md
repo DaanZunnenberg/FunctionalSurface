@@ -107,12 +107,12 @@ notebooks/
   func_garch_gas.ipynb       Functional GAS-GARCH (latest)
   func_garch_gas_example.ipynb  Extended example with diagnostics
 
-matlab/
+reference/
   func_gas_volatility.m      MATLAB reference implementation
   construct_likelihood_repara.m
   fdaM/                      FDA toolbox (Ramsay et al.)
 
-sas_scripts/
+wrds/
   data_fetcher.sas       WRDS TAQ data extraction
   taq_cleaner.sas        Minute-bar resampling
   nbbo_minute_reader.sas NBBO quote aggregation
