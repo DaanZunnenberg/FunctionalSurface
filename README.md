@@ -107,6 +107,7 @@ examples/
   func_garch_snp.ipynb       S&P 500 intraday volatility estimation
   func_garch_gas.ipynb       Functional GAS-GARCH (latest)
   func_garch_gas_example.ipynb  Extended example with diagnostics
+  gas_vol_surface.py         Standalone simulation + estimation script (see below)
 
 scripts/
   taq_cleaner.py         Cleans WRDS TAQ CSV exports into return matrices
@@ -211,6 +212,22 @@ UB      = np.concatenate(([50,   1],    15 * np.ones(M),  2 * np.ones(M**2),  0.
 objective = lambda vtheta: gas_garch_estimator(mY, vb0, dK, N, basis_mat, vtheta)[0]
 result    = minimize(objective, vtheta0, bounds=list(zip(LB, UB)), method='SLSQP')
 ```
+
+---
+
+### GAS-GARCH simulation script
+
+`examples/gas_vol_surface.py` is a self-contained script that:
+1. Simulates a 500-day intraday return panel with a known, time-varying volatility surface.
+2. Estimates the diagonal GAS-GARCH model (26 parameters for M = 8) by maximum likelihood.
+3. Prints goodness-of-fit metrics: RMSE, R², Pearson correlation, residual variance calibration, and a KS test of standardised residuals against the fitted Student-t distribution.
+4. Produces three figure windows: side-by-side 3D surfaces (true vs estimated), flattened time-series comparison, and residual diagnostics (histogram, QQ plot, ACF of squared residuals).
+
+```bash
+python examples/gas_vol_surface.py
+```
+
+The script uses `cubic_bspline_basis` and `ou_kernel` from the package and implements the **diagonal** score update `bₜ = ω + b⊙bₜ₋₁ + a⊙sₜ₋₁` (vectors b, a), which is the version used in `func_garch_gas.ipynb`.  The full matrix version (M×M matrices B, A) is in `gas_garch_estimator` in `gas.py`.
 
 ---
 
