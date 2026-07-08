@@ -87,30 +87,28 @@ where $A_1 = 1 + r_t^\top (S_t \Lambda_\delta S_t)^{-1} r_t\,/\,\nu$ is the scal
 ## Repository Layout
 
 ```
-funcgarch/               Python package
+funcgarch/               Installable Python package
   __init__.py            Public API
   basis.py               bernstein_basis, cubic_bspline_basis, ou_kernel
-  garch.py               delta, functional_operator, loss_func, garch_filter,
+  garch.py               delta, kernel_operator, loss_func, garch_filter,
                          garch_estimator, fit
   gas.py                 gas_garch_estimator, func_garch_estimator
   simulate.py            brownian, simulate
   utils.py               ResultContainer
-  context_manager.py     Jupyter module hot-reload utility
 
-data/
-  taq_cleaner.py         Cleans WRDS TAQ CSV exports into return matrices
-  taq_fetcher.ipynb      TAQ data download notebook
+tests/
+  test_basis.py          Basis function correctness tests
+  test_garch.py          GARCH operator and filter tests
 
-notebooks/
+examples/
   example.ipynb              Minimal functional GARCH example
   func_garch_snp.ipynb       S&P 500 intraday volatility estimation
   func_garch_gas.ipynb       Functional GAS-GARCH (latest)
   func_garch_gas_example.ipynb  Extended example with diagnostics
 
-reference/
-  func_gas_volatility.m      MATLAB reference implementation
-  construct_likelihood_repara.m
-  fdaM/                      FDA toolbox (Ramsay et al.)
+scripts/
+  taq_cleaner.py         Cleans WRDS TAQ CSV exports into return matrices
+  taq_fetcher.ipynb      TAQ data download notebook
 
 wrds/
   data_fetcher.sas       WRDS TAQ data extraction
@@ -119,8 +117,12 @@ wrds/
   dynamic_taq_minute.sas Dynamic TAQ extraction
   export.sas             SAS cloud export helper
 
-price_data_example.csv   Sample price data for quick testing
-setup.py
+reference/
+  func_gas_volatility.m      MATLAB reference implementation
+  construct_likelihood_repara.m
+  fdaM/                      FDA toolbox (Ramsay et al.)
+
+pyproject.toml
 requirements.txt
 ```
 
