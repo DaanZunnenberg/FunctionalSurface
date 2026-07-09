@@ -1,24 +1,12 @@
 """Simulation utilities for the functional GARCH model.
 
-Module role
-───────────
-Generates synthetic (mY, vsigma2_mat) pairs from a functional GARCH(1,1)
-process.  Used for Monte Carlo studies and to verify that ``fit()`` recovers
-known parameters.
+Generates synthetic (returns, variance_surface) pairs from a functional
+GARCH(1,1) process.  Used for Monte Carlo studies and to verify that
+``fit()`` recovers known parameters.
 
 The GARCH recursion here is identical to the one in ``garch_estimator()``, so
-any ``coefs`` vector valid for ``fit()`` can be passed directly to
+any ``params`` vector valid for ``fit()`` can be passed directly to
 ``simulate()``.
-
-The intraday noise at each time step is constructed as cumulative scaled
-Brownian increments (``_brownian_noise``), driven by the function
-``brownian(t) = 2^{400t} / ln 2``.
-
-Dependencies
-────────────
-- ``garch.py`` — imports ``delta`` and ``kernel_operator`` as the default
-  level and kernel callables.  An alternative basis pair can be injected via
-  ``delta_fn`` / ``kernel_fn``.
 """
 
 import warnings
@@ -33,73 +21,69 @@ warnings.filterwarnings(action='ignore')
 
 
 @njit
-def brownian(t: np.ndarray) -> np.ndarray:
-    """Scaled Brownian motion: $W(t) = 2^{400t} / \\ln 2$."""
-    return (2 ** (400 * t)) / np.log(2)
+def brownian(u: np.ndarray) -> np.ndarray:
+    """Scaled Brownian motion: $W(u) = 2^{400u} / \\ln 2$."""
+    return (2 ** (400 * u)) / np.log(2)
 
 
 def _brownian_noise(
-    sigma: np.ndarray,
+    std_dev: np.ndarray,
     bm_incr: np.ndarray,
     eta: np.ndarray,
 ) -> np.ndarray:
     """Intraday noise path: cumulative sum of scaled normal increments."""
-    return np.sqrt(1 / sigma) * np.cumsum(np.sqrt(bm_incr) * eta)
+    return np.sqrt(1 / std_dev) * np.cumsum(np.sqrt(bm_incr) * eta)
 
 
 def simulate(
     shape: tuple[int, int],
-    M: int,
-    coefs: np.ndarray,
+    n_basis: int,
+    params: np.ndarray,
     delta_fn: typing.Callable = delta,
     kernel_fn: typing.Callable = kernel_operator,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Simulate a functional GARCH(1,1) process.
 
-    Generates a return matrix mY and the corresponding conditional variance
-    surface vsigma2_mat. The driving noise is an intraday Brownian increment
-    scaled by the conditional standard deviation.
-
     Args:
-        shape: Tuple (N, T) where N is the intraday grid size and T the
-               number of days.
-        M: Number of Bernstein basis functions.
-        coefs: Parameter vector [delta_coefs (M) | alpha_coefs (M²) | beta_coefs (M²)].
+        shape: Tuple (n_grid, n_days).
+        n_basis: Number of Bernstein basis functions.
+        params: Parameter vector [delta_coefs (n_basis) | alpha_coefs (n_basis²) | beta_coefs (n_basis²)].
         delta_fn: Level operator (default: delta).
         kernel_fn: Kernel operator (default: kernel_operator).
 
     Returns:
-        Tuple (mY, vsigma2_mat), each of shape (N, T).
+        Tuple (returns, variance_surface), each of shape (n_grid, n_days).
     """
-    N, T = shape
-    grid = np.linspace(1 / N, 1 - 1 / N, N)
-    coefs_delta = coefs[:M]
-    coefs_alpha = coefs[M: M + M ** 2]
-    coefs_beta  = coefs[M + M ** 2:]
+    n_grid, n_days = shape
+    grid = np.linspace(1 / n_grid, 1 - 1 / n_grid, n_grid)
 
-    vsigma2     = np.ones(N)
-    mY          = np.ones((N, T))
-    vsigma2_mat = np.zeros((N, T))
-    vsigma2_mat[:, 0] = vsigma2
+    delta_coefs = params[:n_basis]
+    alpha_coefs = params[n_basis: n_basis + n_basis ** 2]
+    beta_coefs  = params[n_basis + n_basis ** 2:]
 
-    delta_hat = delta_fn(coefs_delta, grid, M=M, init=np.zeros(N))
-    alpha_hat = kernel_fn(grid, coefs_alpha, M=M, init=np.zeros((N, N))).T
-    beta_hat  = kernel_fn(grid, coefs_beta,  M=M, init=np.zeros((N, N))).T
-    mY[:, 0]  = delta_hat
+    variance         = np.ones(n_grid)
+    returns          = np.ones((n_grid, n_days))
+    variance_surface = np.zeros((n_grid, n_days))
+    variance_surface[:, 0] = variance
+
+    delta_hat = delta_fn(delta_coefs, grid, n_basis=n_basis, init=np.zeros(n_grid))
+    alpha_hat = kernel_fn(grid, alpha_coefs, n_basis=n_basis, init=np.zeros((n_grid, n_grid))).T
+    beta_hat  = kernel_fn(grid, beta_coefs,  n_basis=n_basis, init=np.zeros((n_grid, n_grid))).T
+    returns[:, 0] = delta_hat
 
     bm_vals  = brownian(grid)
     bm_diffs = np.diff(bm_vals)
     bm_incr  = np.array([bm_diffs[0]] + list(bm_diffs))
 
-    for t in range(1, T):
-        eta = np.random.normal(0, 1, N)
+    for t in range(1, n_days):
+        eta = np.random.normal(0, 1, n_grid)
         eps = _brownian_noise(bm_vals, bm_incr, eta)
-        vsigma2 = (
+        variance = (
             delta_hat
-            + (alpha_hat * mY[:, t - 1] ** 2) @ np.ones(N) / N
-            + (beta_hat  * vsigma2)            @ np.ones(N) / N
+            + (alpha_hat * returns[:, t - 1] ** 2) @ np.ones(n_grid) / n_grid
+            + (beta_hat  * variance)               @ np.ones(n_grid) / n_grid
         )
-        vsigma2_mat[:, t] = vsigma2
-        mY[:, t] = np.sqrt(vsigma2) * eps
+        variance_surface[:, t] = variance
+        returns[:, t] = np.sqrt(variance) * eps
 
-    return mY, vsigma2_mat
+    return returns, variance_surface

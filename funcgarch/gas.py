@@ -1,7 +1,5 @@
 """Functional GAS-GARCH model — B-spline parametrisation.
 
-Module role
-───────────
 Provides two estimators for functional volatility models that parametrise the
 log-volatility curve with a B-spline basis Φ:
 
@@ -19,21 +17,13 @@ log-volatility curve with a B-spline basis Φ:
 ``func_garch_estimator``
     A B-spline GARCH baseline (no score updating).  The variance is evolved
     through the same GARCH(1,1) recursion as in ``garch.py``, but using
-    B-spline basis matrices instead of Bernstein polynomials.  Useful as a
-    performance baseline.
+    B-spline basis matrices instead of Bernstein polynomials.
 
-Both estimators are called directly inside a ``scipy.optimize.minimize`` loop
-(there is no ``fit()`` wrapper).  See ``examples/`` for worked demonstrations.
-
-Dependencies
-────────────
-- ``basis.py`` — ``cubic_bspline_basis`` builds the basis matrix Φ that both
-  estimators expect as input; ``ou_kernel`` builds the OU covariance Λ_δ used
-  in the GAS likelihood.
+Both estimators are called directly inside a ``scipy.optimize.minimize`` loop.
+See ``scripts/`` for worked demonstrations.
 """
 
 import warnings
-import typing
 
 import numpy as np
 from scipy.special import gammaln
@@ -42,152 +32,146 @@ from .basis import cubic_bspline_basis, ou_kernel
 
 warnings.filterwarnings(action='ignore')
 
-
-class _CallCounter:
-    count: int = 0
+_call_count: list[int] = [0]
 
 
-_COUNT = _CallCounter()
-
-
-def _log_step(name: str, counter: _CallCounter, log_loss: float, log_every: int = 1) -> None:
-    """Print a convergence update for the GAS optimiser."""
-    if counter.count % log_every == 0:
-        msg = f'Running {name} :: call #{counter.count:<5} :: loss: {log_loss:.6f}'
+def _log_step(model_name: str, loss: float, log_every: int = 1) -> None:
+    """Print a convergence update; increment the global call counter."""
+    if _call_count[0] % log_every == 0:
+        msg = f'Running {model_name} :: call #{_call_count[0]:<5} :: loss: {loss:.6f}'
         print(msg.ljust(len(msg) + 30, ' '), end='\r')
+    _call_count[0] += 1
 
 
 def gas_garch_estimator(
-    mY: np.ndarray,
-    vb_ini: np.ndarray,
-    dK: int,
-    n: int,
+    returns: np.ndarray,
+    init_coefs: np.ndarray,
     basis_mat: np.ndarray,
-    vtheta: np.ndarray,
+    params: np.ndarray,
 ) -> tuple[float, np.ndarray]:
-    """Functional GAS-GARCH log-likelihood and fitted volatility surface.
+    """Functional GAS-GARCH log-likelihood and fitted log-volatility surface.
 
     Implements the score-driven update for the B-spline coefficient vector b_t:
-        b_t = omega + B @ b_{t-1} + A @ score_t
+        b_t = omega + persistence_mat @ b_{t-1} + score_gain_mat @ score_t
 
     where the score is derived from the multivariate Student-t log-likelihood
     with OU-structured covariance.
 
     Args:
-        mY: Return matrix, shape (n, T). Rows are intraday times, columns are days.
-        vb_ini: Initial B-spline coefficient vector, shape (dK+1, 1).
-        dK: Number of B-spline basis functions minus one.
-        n: Number of intraday grid points.
-        basis_mat: B-spline basis matrix, shape (dK+1, n).
-        vtheta: Parameter vector:
-            [nu, ou_scale, omega (M), vec(B) (M²), vec(A) (M²)]
-            where M = dK + 1.
+        returns: Return matrix, shape (n_grid, n_days).
+        init_coefs: Initial B-spline coefficient vector, shape (n_basis, 1).
+        basis_mat: B-spline basis matrix, shape (n_basis, n_grid).
+        params: Parameter vector:
+            [nu, ou_scale, omega (n_basis), vec(B) (n_basis²), vec(A) (n_basis²)]
 
     Returns:
-        Tuple of (negative average log-likelihood, fitted sigma matrix of shape (n, T)).
+        Tuple of (negative average log-likelihood, log-volatility surface of
+        shape (n_grid, n_days)).
     """
-    T = mY.shape[1]
-    nu       = vtheta[0]
-    ou_scale = vtheta[1]
-    M        = dK + 1
+    n_basis, n_grid = basis_mat.shape
+    n_days = returns.shape[1]
 
-    omega = np.array(vtheta[2: M + 2]).reshape((M, 1))
-    mB    = np.array(vtheta[M + 2: M + 2 + M ** 2]).reshape((M, M))
-    mA    = np.array(vtheta[-(M ** 2):]).reshape((M, M))
+    nu       = params[0]
+    ou_scale = params[1]
+    omega          = params[2: n_basis + 2].reshape(n_basis, 1)
+    persistence_mat = params[n_basis + 2: n_basis + 2 + n_basis ** 2].reshape(n_basis, n_basis)
+    score_gain_mat  = params[-(n_basis ** 2):].reshape(n_basis, n_basis)
 
-    cov_mat = ou_kernel(np.linspace(0, 1, mY.shape[0]), delta=ou_scale)
-    cov_inv = np.linalg.inv(cov_mat)
+    cov_mat  = ou_kernel(np.linspace(0, 1, n_grid), delta=ou_scale)
+    cov_inv  = np.linalg.inv(cov_mat)
+    nu_scale = (nu + n_grid) / (2 * nu)
 
-    vb_now    = vb_ini.copy()
-    vy_now    = mY[:, 0].copy().reshape((n, 1))
-    sigma_mat = np.zeros(mY.shape)
-    log_lik   = 0.0
-    nu_scale  = (nu + n) / (2 * nu)
+    coef_vec        = init_coefs.copy()
+    returns_prev    = returns[:, 0].copy().reshape(n_grid, 1)
+    log_vol_surface = np.zeros(returns.shape)
+    log_lik         = 0.0
 
-    for t in range(1, T):
-        sigma_now = basis_mat.T @ vb_now  # (n, 1)
-        sigma_mat[:, t] = sigma_now[:, 0]
+    for t in range(1, n_days):
+        log_vol = basis_mat.T @ coef_vec          # (n_grid, 1)
+        log_vol_surface[:, t] = log_vol[:, 0]
 
-        Y  = vy_now
-        S  = np.exp(sigma_now / 2)
-        R  = np.eye(n) / S
+        std_dev   = np.exp(log_vol / 2)           # sigma_t at each grid point
+        scale_inv = np.eye(n_grid) / std_dev      # diag(1/sigma_t)
 
-        A1 = float(np.sum(1 + (Y.T @ (R @ (cov_inv @ (R @ Y)))) / nu))
-        A2 = (Y / S).T * basis_mat
-        A3 = A2 @ (cov_inv @ (R @ Y))
+        student_denom = float(np.sum(
+            1 + (returns_prev.T @ (scale_inv @ (cov_inv @ (scale_inv @ returns_prev)))) / nu
+        ))
+        score_a = (returns_prev / std_dev).T * basis_mat   # (n_basis, n_grid)
+        score_b = score_a @ (cov_inv @ (scale_inv @ returns_prev))
 
         if t > 5:
-            log_lik += -0.5 * float(np.sum(sigma_now)) - ((n + nu) / 2) * np.log(A1)
+            log_lik += (
+                -0.5 * float(np.sum(log_vol))
+                - ((n_grid + nu) / 2) * np.log(student_denom)
+            )
 
-        score  = np.array(
-            -0.5 * (basis_mat @ np.ones(n)).reshape((dK + 1, 1))
-            + (nu_scale / A1) * A3
+        score    = (
+            -0.5 * basis_mat.sum(axis=1, keepdims=True)
+            + (nu_scale / student_denom) * score_b
         )
-        vb_now = omega + mB @ vb_now + mA @ score
-        vy_now = mY[:, t].reshape((n, 1))
+        coef_vec     = omega + persistence_mat @ coef_vec + score_gain_mat @ score
+        returns_prev = returns[:, t].reshape(n_grid, 1)
 
-    log_lik += T * (
-        gammaln((nu + n) / 2)
+    log_lik += n_days * (
+        gammaln((nu + n_grid) / 2)
         - gammaln(nu / 2)
-        - (n / 2) * np.log(np.pi * nu)
+        - (n_grid / 2) * np.log(np.pi * nu)
         - 0.5 * np.log(np.linalg.det(cov_mat))
     )
-    _log_step('GAS estimator', _COUNT, -log_lik / T)
-    _COUNT.count += 1
-    return -log_lik / T, sigma_mat
+    _log_step('GAS estimator', -log_lik / n_days)
+    return -log_lik / n_days, log_vol_surface
 
 
 def func_garch_estimator(
-    mY: np.ndarray,
-    basis_splines: np.ndarray,
-    vtheta: np.ndarray,
-    M: int,
+    returns: np.ndarray,
+    basis_mat: np.ndarray,
+    params: np.ndarray,
     p: int = 1,
     q: int = 1,
 ) -> tuple[float, np.ndarray]:
     """Functional GARCH estimator using B-spline basis projections.
 
     Implements the functional GARCH(1,1) recursion in the B-spline coefficient
-    space. The conditional variance operator is:
+    space:
         sigma²_t = B^T delta + (B^T A B) * y²_{t-1} + sigma²_{t-1} (B^T C B)
 
     Args:
-        mY: Return matrix, shape (N, T). Rows are intraday times, columns are days.
-        basis_splines: B-spline basis matrix, shape (M, N).
-        vtheta: Parameter vector [delta_coefs (M) | vec(alpha) (M²) | vec(beta) (M²)].
-        M: Number of B-spline basis functions.
+        returns: Return matrix, shape (n_grid, n_days).
+        basis_mat: B-spline basis matrix, shape (n_basis, n_grid).
+        params: Parameter vector [delta_coefs (n_basis) | vec(alpha) (n_basis²) | vec(beta) (n_basis²)].
         p: AR order (currently only p=1 supported).
         q: MA order (currently only q=1 supported).
 
     Returns:
-        Tuple of (MSE loss, fitted variance matrix of shape (N, T)).
+        Tuple of (MSE loss, fitted variance matrix of shape (n_grid, n_days)).
     """
     if max(p, q) > 1:
         raise NotImplementedError('Order (p,q) must be (1,1)')
 
-    N, T = mY.shape
-    coefs_delta = np.array(vtheta[:M]).reshape(1, M)
-    coefs_alpha = vtheta[M: M + M ** 2].reshape((M, M))
-    coefs_beta  = vtheta[M + M ** 2:].reshape((M, M))
+    n_basis = basis_mat.shape[0]
+    n_grid, n_days = returns.shape
 
-    vsigma2     = np.ones(N)
-    vsigma2_mat = np.zeros(mY.shape)
-    vsigma2_mat[:, 0] = vsigma2
+    delta_coefs = np.array(params[:n_basis]).reshape(1, n_basis)
+    alpha_coefs = params[n_basis: n_basis + n_basis ** 2].reshape(n_basis, n_basis)
+    beta_coefs  = params[n_basis + n_basis ** 2:].reshape(n_basis, n_basis)
 
-    delta_hat = coefs_delta @ basis_splines                        # (1, N)
-    alpha_hat = basis_splines.T @ (coefs_alpha @ basis_splines)   # (N, N)
-    beta_hat  = basis_splines.T @ (coefs_beta  @ basis_splines)   # (N, N)
+    variance         = np.ones(n_grid)
+    variance_surface = np.zeros(returns.shape)
+    variance_surface[:, 0] = variance
+
+    delta_hat = delta_coefs @ basis_mat                      # (1, n_grid)
+    alpha_hat = basis_mat.T @ (alpha_coefs @ basis_mat)     # (n_grid, n_grid)
+    beta_hat  = basis_mat.T @ (beta_coefs  @ basis_mat)     # (n_grid, n_grid)
 
     loss = 0.0
-    for t in range(1, T):
-        vsigma2 = np.asarray(
+    for t in range(1, n_days):
+        variance = np.asarray(
             delta_hat
-            + (alpha_hat * mY[:, t - 1] ** 2) @ np.ones(N) / N
-            + (vsigma2 @ beta_hat) / N
+            + (alpha_hat * returns[:, t - 1] ** 2) @ np.ones(n_grid) / n_grid
+            + (variance @ beta_hat) / n_grid
         ).ravel()
-        vsigma2_mat[:, t] = vsigma2
-        loss += float(np.sum(((mY[:, t] ** 2 - vsigma2) * basis_splines) ** 2))
+        variance_surface[:, t] = variance
+        loss += float(np.sum(((returns[:, t] ** 2 - variance) * basis_mat) ** 2))
 
-    _log_step('GARCH estimator', _COUNT, loss)
-    _COUNT.count += 1
-    return loss, vsigma2_mat
+    _log_step('GARCH estimator', loss)
+    return loss, variance_surface

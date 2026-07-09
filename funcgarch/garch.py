@@ -1,7 +1,5 @@
 """Functional GARCH model — Bernstein-basis parametrisation.
 
-Module role
-───────────
 Implements the complete estimation and filtering pipeline for the functional
 GARCH(1,1) model.  The conditional variance curve σ²_t(·) is approximated in
 the M-dimensional Bernstein polynomial basis and evolved through an
@@ -15,26 +13,13 @@ Estimation::
 
     fit()
       └─▶ garch_estimator()        # called once per scipy optimizer step
-            ├─▶ _build_operators() # unpacks vtheta -> delta_hat, alpha_hat, beta_hat  (N×N matrices)
+            ├─▶ _build_operators() # unpacks params -> delta_hat, alpha_hat, beta_hat
             └─▶ loss_func()        # Bernstein-projected MSE, accumulated per day
 
 Post-estimation::
 
-    garch_filter()                 # same GARCH recursion as garch_estimator,
-      └─▶ _build_operators()       # but returns the full (N, T) variance surface
-
-Dependencies
-────────────
-- ``basis.py`` — ``bernstein_basis`` is used inside ``delta`` and
-  ``kernel_operator`` (both JIT-compiled here).
-- ``utils.py`` — ``ResultContainer`` wraps the scipy OptimizeResult returned
-  by ``fit()``.
-
-Imported by
-───────────
-- ``simulate.py`` — imports ``delta`` and ``kernel_operator`` as default
-  callables for the simulation GARCH recursion.
-- ``__init__.py`` — re-exports the public API.
+    garch_filter()                 # same recursion as garch_estimator,
+      └─▶ _build_operators()       # but returns the full (n_grid, n_days) surface
 """
 
 from __future__ import annotations
@@ -51,7 +36,6 @@ from .utils import ResultContainer
 
 warnings.filterwarnings(action='ignore')
 
-# Mutable module-level counter for convergence logging; reset to 0 after each fit().
 _call_count: list[int] = [0]
 
 
@@ -64,47 +48,47 @@ def _log_step(loss: float, params: np.ndarray, log_every: int = 500) -> None:
 
 
 @njit
-def delta(coefs: np.ndarray, t: float, M: int, init: float = 0.0) -> float:
-    r"""Level operator $\delta(t) = \sum_{k=1}^M c_k \varphi_k^M(t)$.
+def delta(coefs: np.ndarray, u: float, n_basis: int, init: float = 0.0) -> float:
+    r"""Level operator $\delta(u) = \sum_{k=1}^M c_k \varphi_k^M(u)$.
 
     Args:
-        coefs: Level coefficient vector, length M.
-        t: Evaluation point(s) in [0, 1].  Pass a scalar or an array.
-        M: Number of Bernstein basis functions.
-        init: Starting value for the accumulation.  Pass ``np.zeros(N)``
-              for vectorised evaluation over a grid of length N.
+        coefs: Level coefficient vector, length n_basis.
+        u: Evaluation point(s) in [0, 1].  Pass a scalar or an array.
+        n_basis: Number of Bernstein basis functions.
+        init: Starting value for the accumulation.  Pass ``np.zeros(n_grid)``
+              for vectorised evaluation over a grid of length n_grid.
     """
     acc = init
     for k, c in enumerate(coefs):
-        acc = acc + c * bernstein_basis(t, M, k + 1)
+        acc = acc + c * bernstein_basis(u, n_basis, k + 1)
     return acc
 
 
 @jit(nopython=True)
 def kernel_operator(
-    t: np.ndarray,
+    u: np.ndarray,
     coefs: np.ndarray,
-    M: int,
+    n_basis: int,
     init: np.ndarray,
 ) -> np.ndarray:
-    r"""Kernel operator $\mathcal{K}(t,s) = \sum_{k,l} c_{kl}\,\varphi_k^M(t)\,\varphi_l^M(s)$.
+    r"""Kernel operator $\mathcal{K}(u,s) = \sum_{k,l} c_{kl}\,\varphi_k^M(u)\,\varphi_l^M(s)$.
 
     Evaluates the M²-term double sum via matrix products of Bernstein column
-    vectors, returning an N×N matrix.
+    vectors, returning an n_grid×n_grid matrix.
 
     Args:
-        t: Grid vector of length N; reshaped to a column internally.
-        coefs: Flattened coefficient matrix, length M².
-        M: Number of Bernstein basis functions per dimension.
-        init: Zero-initialised N×N accumulator array (required by Numba).
+        u: Grid vector of length n_grid; reshaped to a column internally.
+        coefs: Flattened coefficient matrix, length n_basis².
+        n_basis: Number of Bernstein basis functions per dimension.
+        init: Zero-initialised (n_grid, n_grid) accumulator array (required by Numba).
     """
     acc = init
-    col = t.reshape((len(t), 1))
+    col = u.reshape((len(u), 1))
     idx = 0
-    for k in range(1, M + 1):
-        bk = bernstein_basis(col, M, k)
-        for l in range(1, M + 1):
-            acc = acc + coefs[idx] * bk @ bernstein_basis(col, M, l).T
+    for k in range(1, n_basis + 1):
+        bk = bernstein_basis(col, n_basis, k)
+        for j in range(1, n_basis + 1):
+            acc = acc + coefs[idx] * bk @ bernstein_basis(col, n_basis, j).T
             idx += 1
     return acc
 
@@ -112,8 +96,8 @@ def kernel_operator(
 @jit(nopython=True)
 def loss_func(
     returns: np.ndarray,
-    sigma2: np.ndarray,
-    M: int,
+    variance: np.ndarray,
+    n_basis: int,
     grid: np.ndarray,
 ) -> float:
     r"""Bernstein-projected MSE between squared returns and conditional variance.
@@ -126,26 +110,22 @@ def loss_func(
               \frac{1}{N}\sum_{i=1}^{N}
               \bigl[(r_t(u_i)^2 - \sigma_t^2(u_i))\,\varphi_k^M(u_i)\bigr]^2
 
-    which approximates
-    :math:`\sum_k \bigl\|(r_t^2 - \sigma_t^2)\,\varphi_k^M\bigr\|_{L^2}^2`.
-    Summing over days gives the objective minimised by ``garch_estimator``.
-
     Args:
-        returns: Intraday return vector for one day, shape (N,).
-        sigma2: Conditional variance vector, shape (N,).
-        M: Number of Bernstein basis functions.
-        grid: Intraday evaluation grid, shape (N,).
+        returns: Intraday return vector for one day, shape (n_grid,).
+        variance: Conditional variance vector, shape (n_grid,).
+        n_basis: Number of Bernstein basis functions.
+        grid: Intraday evaluation grid, shape (n_grid,).
     """
     total = 0.0
-    for k in range(1, M + 1):
-        w = bernstein_basis(grid, M, k)
-        total += np.mean(((returns ** 2 - sigma2) * w) ** 2)
+    for k in range(1, n_basis + 1):
+        w = bernstein_basis(grid, n_basis, k)
+        total += np.mean(((returns ** 2 - variance) * w) ** 2)
     return total
 
 
 def _build_operators(
-    vtheta: np.ndarray,
-    M: int,
+    params: np.ndarray,
+    n_basis: int,
     n_grid: int,
     delta_fn: typing.Callable,
     kernel_fn: typing.Callable,
@@ -153,69 +133,68 @@ def _build_operators(
     """Unpack parameter vector into pre-evaluated operator matrices.
 
     Returns:
-        (grid, delta_hat, alpha_hat, beta_hat) where delta_hat is shape (N,)
-        and alpha_hat, beta_hat are (N, N).
+        (grid, delta_hat, alpha_hat, beta_hat) where delta_hat is shape (n_grid,)
+        and alpha_hat, beta_hat are (n_grid, n_grid).
     """
     grid = np.linspace(1 / n_grid, 1 - 1 / n_grid, n_grid)
-    coefs_delta = vtheta[:M]
-    coefs_alpha = vtheta[M: M + M ** 2]
-    coefs_beta  = vtheta[M + M ** 2:]
-    delta_hat = delta_fn(coefs_delta, grid, M=M, init=np.zeros(n_grid))
-    alpha_hat = kernel_fn(grid, coefs_alpha, M=M, init=np.zeros((n_grid, n_grid))).T
-    beta_hat  = kernel_fn(grid, coefs_beta,  M=M, init=np.zeros((n_grid, n_grid))).T
+    delta_coefs = params[:n_basis]
+    alpha_coefs = params[n_basis: n_basis + n_basis ** 2]
+    beta_coefs  = params[n_basis + n_basis ** 2:]
+    delta_hat = delta_fn(delta_coefs, grid, n_basis=n_basis, init=np.zeros(n_grid))
+    alpha_hat = kernel_fn(grid, alpha_coefs, n_basis=n_basis, init=np.zeros((n_grid, n_grid))).T
+    beta_hat  = kernel_fn(grid, beta_coefs,  n_basis=n_basis, init=np.zeros((n_grid, n_grid))).T
     return grid, delta_hat, alpha_hat, beta_hat
 
 
 def garch_filter(
-    mY: np.ndarray,
+    returns: np.ndarray,
     n_grid: int,
-    vtheta: np.ndarray,
-    M: int,
-    sigma2_init: np.ndarray,
+    params: np.ndarray,
+    n_basis: int,
+    initial_variance: np.ndarray,
     delta_fn: typing.Callable = delta,
     kernel_fn: typing.Callable = kernel_operator,
 ) -> np.ndarray:
     """Extract the conditional variance surface from observed returns.
 
-    Applies the fitted functional GARCH recursion forward through all T days.
+    Applies the fitted functional GARCH recursion forward through all days.
 
     Args:
-        mY: Return matrix, shape (N, T).
-        n_grid: Number of intraday grid points N.
-        vtheta: Parameter vector [delta_coefs (M) | alpha_coefs (M²) | beta_coefs (M²)].
-        M: Number of Bernstein basis functions.
-        sigma2_init: Initial variance vector, shape (N,).
+        returns: Return matrix, shape (n_grid, n_days).
+        n_grid: Number of intraday grid points.
+        params: Parameter vector [delta_coefs (n_basis) | alpha_coefs (n_basis²) | beta_coefs (n_basis²)].
+        n_basis: Number of Bernstein basis functions.
+        initial_variance: Initial variance vector, shape (n_grid,).
         delta_fn: Level operator (injectable for alternative bases).
         kernel_fn: Kernel operator (injectable for alternative bases).
 
     Returns:
-        Variance matrix of shape (N, T).
+        Variance matrix of shape (n_grid, n_days).
     """
-    N, T = mY.shape
+    n_grid_obs, n_days = returns.shape
     grid, delta_hat, alpha_hat, beta_hat = _build_operators(
-        vtheta, M, n_grid, delta_fn, kernel_fn
+        params, n_basis, n_grid, delta_fn, kernel_fn
     )
-    ones_N = np.ones(N)
-    sigma2 = sigma2_init * np.ones(n_grid)
-    sigma2_mat = np.zeros((N, T))
-    sigma2_mat[:, 0] = sigma2
+    variance = initial_variance * np.ones(n_grid)
+    variance_surface = np.zeros((n_grid_obs, n_days))
+    variance_surface[:, 0] = variance
 
-    for t in range(1, T):
-        sigma2 = (
+    for t in range(1, n_days):
+        variance = (
             delta_hat
-            + (alpha_hat * mY[:, t - 1] ** 2) @ ones_N / N
-            + (beta_hat  * sigma2)             @ ones_N / N
+            + (alpha_hat * returns[:, t - 1] ** 2) @ np.ones(n_grid_obs) / n_grid_obs
+            + (beta_hat  * variance)               @ np.ones(n_grid_obs) / n_grid_obs
         )
-        sigma2_mat[:, t] = sigma2
-    return sigma2_mat
+        variance_surface[:, t] = variance
+    return variance_surface
 
 
 def garch_estimator(
-    mY: np.ndarray,
+    returns: np.ndarray,
     n_grid: int,
-    vtheta: np.ndarray,
-    M: int,
-    sigma2_init: np.ndarray,
+    params: np.ndarray,
+    n_basis: int,
+    initial_variance: np.ndarray,
     delta_fn: typing.Callable = delta,
     kernel_fn: typing.Callable = kernel_operator,
     loss_fn: typing.Callable = loss_func,
@@ -223,15 +202,15 @@ def garch_estimator(
 ) -> float:
     """Compute the functional GARCH objective for a given parameter vector.
 
-    Runs the GARCH recursion forward through all T days and accumulates the
+    Runs the GARCH recursion forward through all days and accumulates the
     Bernstein-projected MSE loss.  Designed to be passed to scipy.minimize.
 
     Args:
-        mY: Return matrix, shape (N, T).
-        n_grid: Number of intraday grid points N.
-        vtheta: Parameter vector [delta_coefs (M) | alpha_coefs (M²) | beta_coefs (M²)].
-        M: Number of Bernstein basis functions.
-        sigma2_init: Initial variance vector, shape (N,).
+        returns: Return matrix, shape (n_grid, n_days).
+        n_grid: Number of intraday grid points.
+        params: Parameter vector [delta_coefs (n_basis) | alpha_coefs (n_basis²) | beta_coefs (n_basis²)].
+        n_basis: Number of Bernstein basis functions.
+        initial_variance: Initial variance vector, shape (n_grid,).
         delta_fn: Level operator.
         kernel_fn: Kernel operator.
         loss_fn: Per-day loss function (default: loss_func).
@@ -240,32 +219,31 @@ def garch_estimator(
     Returns:
         Scalar objective value.
     """
-    N, T = mY.shape
+    n_grid_obs, n_days = returns.shape
     grid, delta_hat, alpha_hat, beta_hat = _build_operators(
-        vtheta, M, n_grid, delta_fn, kernel_fn
+        params, n_basis, n_grid, delta_fn, kernel_fn
     )
-    ones_N = np.ones(N)
-    sigma2 = sigma2_init * np.ones(n_grid)
+    variance = initial_variance * np.ones(n_grid)
     total_loss = 0.0
 
-    for t in range(1, T):
-        sigma2 = (
+    for t in range(1, n_days):
+        variance = (
             delta_hat
-            + ((alpha_hat * mY[:, t - 1] ** 2) @ ones_N
-            +  (beta_hat  * sigma2)             @ ones_N) / N
+            + ((alpha_hat * returns[:, t - 1] ** 2) @ np.ones(n_grid_obs)
+            +  (beta_hat  * variance)               @ np.ones(n_grid_obs)) / n_grid_obs
         )
-        total_loss += loss_fn(mY[:, t], sigma2, M, grid)
+        total_loss += loss_fn(returns[:, t], variance, n_basis, grid)
 
     if print_convergence:
-        _log_step(total_loss, vtheta)
+        _log_step(total_loss, params)
     return total_loss
 
 
 def fit(
-    mY: np.ndarray,
-    sigma2_init: np.ndarray,
+    returns: np.ndarray,
+    initial_variance: np.ndarray,
     n_grid: int,
-    M: int = 1,
+    n_basis: int = 1,
     estimator_fn: typing.Callable = garch_estimator,
     delta_fn: typing.Callable = delta,
     kernel_fn: typing.Callable = kernel_operator,
@@ -280,10 +258,10 @@ def fit(
     passed through **kwargs.
 
     Args:
-        mY: Return matrix, shape (N, T).
-        sigma2_init: Initial variance vector, shape (N,).
-        n_grid: Number of intraday grid points N.
-        M: Number of Bernstein basis functions.
+        returns: Return matrix, shape (n_grid, n_days).
+        initial_variance: Initial variance vector, shape (n_grid,).
+        n_grid: Number of intraday grid points.
+        n_basis: Number of Bernstein basis functions.
         estimator_fn: Full-sequence objective to minimise.
         delta_fn: Level operator (override to use a different basis).
         kernel_fn: Kernel operator (override to use a different basis).
@@ -299,27 +277,27 @@ def fit(
     Example::
 
         result = fit(
-            mY, sigma2_init=np.ones(N), n_grid=N, M=2,
-            x0=np.zeros(M + 2 * M**2),
-            bounds=[(-.99, .99)] * (M + 2 * M**2),
+            returns, initial_variance=np.ones(n_grid), n_grid=n_grid, n_basis=2,
+            x0=np.zeros(n_basis + 2 * n_basis**2),
+            bounds=[(-.99, .99)] * (n_basis + 2 * n_basis**2),
             method='SLSQP',
         )
-        theta_hat = result.x
+        params_hat = result.x
     """
-    _options = {'disp': True}
+    optimizer_options = {'disp': True}
     if options:
-        _options.update(options)
+        optimizer_options.update(options)
 
-    def _objective(vtheta: np.ndarray) -> float:
+    def _objective(params: np.ndarray) -> float:
         return estimator_fn(
-            mY, n_grid, vtheta,
-            M=M, sigma2_init=sigma2_init,
+            returns, n_grid, params,
+            n_basis=n_basis, initial_variance=initial_variance,
             delta_fn=delta_fn, kernel_fn=kernel_fn, loss_fn=loss_fn,
             print_convergence=print_convergence,
         )
 
     try:
-        opt = minimize(_objective, options=_options, **kwargs)
+        opt = minimize(_objective, options=optimizer_options, **kwargs)
     finally:
         _call_count[0] = 0
 
@@ -336,24 +314,27 @@ if __name__ == '__main__':
         .loc['2023-12-14':'2024-02-22']
         .resample('300S').last()
     )
-    returns = 100 * np.log(prices[1:] / prices[:-1].values)
-    N, T = int(len(returns) / 70), 70
-    mY = np.column_stack([returns.iloc[k * T: k * T + N].values for k in range(T)])
+    log_returns = 100 * np.log(prices[1:] / prices[:-1].values)
+    n_grid, n_days = int(len(log_returns) / 70), 70
+    returns = np.column_stack([
+        log_returns.iloc[k * n_days: k * n_days + n_grid].values
+        for k in range(n_days)
+    ])
 
-    M = 4
-    result = fit(
-        mY, sigma2_init=np.ones(N), n_grid=N, M=M,
-        x0=np.array([0.001] * M + [np.random.uniform(-0.2, 1) for _ in range(2 * M ** 2)]),
-        bounds=[(-.99, .99)] * (M + 2 * M ** 2),
+    n_basis = 4
+    fit_result = fit(
+        returns, initial_variance=np.ones(n_grid), n_grid=n_grid, n_basis=n_basis,
+        x0=np.array([0.001] * n_basis + [np.random.uniform(-0.2, 1) for _ in range(2 * n_basis ** 2)]),
+        bounds=[(-.99, .99)] * (n_basis + 2 * n_basis ** 2),
         method='SLSQP',
     )
 
-    grid = np.linspace(1 / N, 1 - 1 / N, N)
+    grid = np.linspace(1 / n_grid, 1 - 1 / n_grid, n_grid)
     fig, ax = plt.subplots()
-    ax.plot(delta(result.x[:M], grid, M=M, init=np.zeros(N)), label='level δ')
-    ax.plot(mY[:, 50], color='black', lw=1, alpha=0.5, label='returns day 50')
+    ax.plot(delta(fit_result.x[:n_basis], grid, n_basis=n_basis, init=np.zeros(n_grid)), label='level δ')
+    ax.plot(returns[:, 50], color='black', lw=1, alpha=0.5, label='returns day 50')
     ax.plot(
-        garch_filter(mY, n_grid=N, vtheta=result.x, M=M, sigma2_init=np.ones(N))[:, 60],
+        garch_filter(returns, n_grid=n_grid, params=fit_result.x, n_basis=n_basis, initial_variance=np.ones(n_grid))[:, 60],
         label='σ² day 60',
     )
     ax.legend()
