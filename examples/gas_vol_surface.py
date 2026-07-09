@@ -215,10 +215,10 @@ def fit_gas(
 
     vb0     = np.ones((M, 1))
     vtheta0 = np.concatenate((
-        [2.1, 0.001], np.ones(M), -0.5 * np.ones(M), 0.1 * np.ones(M)
+        [2.1, 0.5], np.ones(M), 0.5 * np.ones(M), 0.05 * np.ones(M)
     ))
-    LB = np.concatenate(([1.05, 1e-5], -5 * np.ones(M), -2 * np.ones(M), -0.9 * np.ones(M)))
-    UB = np.concatenate(([50,   1.0],  15 * np.ones(M),  2 * np.ones(M),  0.9 * np.ones(M)))
+    LB = np.concatenate(([1.05, 1e-5], -5 * np.ones(M), -0.99 * np.ones(M), -0.5 * np.ones(M)))
+    UB = np.concatenate(([50,   1.0],  15 * np.ones(M),  0.99 * np.ones(M),  0.5 * np.ones(M)))
 
     call_count = [0]
 
