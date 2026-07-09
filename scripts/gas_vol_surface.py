@@ -2,11 +2,11 @@
 """
 Functional GAS-GARCH volatility surface estimation
 ====================================================
-Replicates the simulation experiment from the gas_garch notebooks.
+Replicates the simulation experiment from func_garch_gas.ipynb.
 
 Workflow
 --------
-1.  Simulate an (n_grid, n_days) return panel with a known intraday volatility
+1.  Simulate an (N_GRID, N_DAYS) return panel with a known intraday volatility
     surface whose shape and level vary sinusoidally across days.
 2.  Estimate the diagonal GAS-GARCH model by maximum likelihood.
 3.  Evaluate the fit with metrics (RMSE, R², residual calibration) and plots.
@@ -17,20 +17,22 @@ The log-variance curve is parametrised as
 
     log sigma2_t(u) = Phi(u)^T b_t
 
-where Phi is the (n_basis x n_grid) B-spline basis matrix and b_t follows
-the diagonal score-driven update
+where Phi is the (M x N) B-spline basis matrix (built by basis.cubic_bspline_basis)
+and b_t follows the diagonal score-driven update
 
-    b_t = omega + b_diag * b_{t-1} + a_diag * score_{t-1}
+    b_t = omega + b(*) b_{t-1} + a(*) s_{t-1},    b, a in R^M
 
-where b_diag, a_diag are element-wise (diagonal) multipliers and score_t is
-the score of the multivariate Student-t log-likelihood under the OU covariance.
+where (*) denotes element-wise multiplication and s_t is the score of the
+multivariate Student-t log-likelihood under the OU covariance structure
+Lambda_delta (built by basis.ou_kernel).  This is the diagonal restriction
+of the full matrix GAS model in gas.py, which uses M x M matrices B and A.
 
-Parameter vector layout (length 2 + 3*n_basis):
-    [ nu, ou_scale, omega_1...omega_M, b_1...b_M, a_1...a_M ]
+Parameter vector layout (length 2 + 3M):
+    [ nu, delta, omega_1...omega_M, b_1...b_M, a_1...a_M ]
 
 Usage
 -----
-    pip install -e .
+    pip install -e .                     # install the package first
     python scripts/gas_vol_surface.py
 """
 
@@ -51,126 +53,130 @@ from funcgarch.basis import cubic_bspline_basis, ou_kernel
 
 # ── configuration ─────────────────────────────────────────────────────────────
 
-N_GRID       = 25     # intraday grid points
-N_DAYS       = 500    # trading days
-N_BASIS      = 8      # number of B-spline basis functions (including constant)
-N_INT_KNOTS  = 3      # interior B-spline knots
-SEED         = 42
-MAXITER      = 1000
-WARMUP       = 10     # days dropped from diagnostics (filter initialisation)
+N_GRID      = 25     # intraday grid points  (n)
+N_DAYS      = 500    # trading days          (T)
+DK          = 7      # spline parameter — M = DK + 1 = 8 basis functions
+N_INT_KNOTS = 3      # interior B-spline knots
+SEED        = 42
+MAXITER     = 1000
+WARMUP      = 10     # days dropped from diagnostics (filter initialisation)
 
 
 # ── simulation ────────────────────────────────────────────────────────────────
 
-def simulate_vol_surface(n_grid: int, n_days: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+def simulate_vol_surface(n: int, T: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
     """Simulate returns with a known intraday volatility surface.
 
     The true variance at grid point i on day t is
 
         sigma2_t(u_i) = 4 + 10*(i - c(t))^2 / (3*n/4)^2  +  2*sin(2*pi*t/T)
 
-    where c(t) = n/2 + n/4 * sin(3*pi*t/T) oscillates sinusoidally.
+    where c(t) = n/2 + n/4 * sin(3*pi*t/T) oscillates sinusoidally, producing a
+    U-shaped intraday profile whose trough shifts over time.
 
     Returns
     -------
-    returns       Log-return matrix, shape (n_grid, n_days).
-    true_variance True variance matrix, shape (n_grid, n_days).
+    mY          Log-return matrix, shape (n, T).
+    sigma2_true True variance matrix, shape (n, T).
     """
     rng = np.random.default_rng(seed)
-    grid_i = np.arange(n_grid)
-    true_variance = np.zeros((n_grid, n_days))
-    for t in range(n_days):
-        centre = n_grid / 2 + (n_grid / 4) * np.sin(t * 3 * np.pi / n_days)
-        true_variance[:, t] = (
+    grid_i = np.arange(n)
+    sigma2 = np.zeros((n, T))
+    for t in range(T):
+        centre = n / 2 + (n / 4) * np.sin(t * 3 * np.pi / T)
+        sigma2[:, t] = (
             4
-            + 10 * (grid_i - centre) ** 2 / (0.75 * n_grid) ** 2
-            + 2 * np.sin(t * 2 * np.pi / n_days)
+            + 10 * (grid_i - centre) ** 2 / (0.75 * n) ** 2
+            + 2 * np.sin(t * 2 * np.pi / T)
         )
-    returns = np.sqrt(true_variance) * rng.standard_normal((n_grid, n_days))
-    return returns, true_variance
+    mY = np.sqrt(sigma2) * rng.standard_normal((n, T))
+    return mY, sigma2
 
 
-# ── diagonal GAS-GARCH filter ─────────────────────────────────────────────────
+# ── GAS-GARCH filter ──────────────────────────────────────────────────────────
 
 def _gas_filter(
-    returns: np.ndarray,
-    init_coefs: np.ndarray,
+    mY: np.ndarray,
+    vb_ini: np.ndarray,
+    dK: int,
     basis_mat: np.ndarray,
-    params: np.ndarray,
+    vtheta: np.ndarray,
 ) -> tuple[float, np.ndarray]:
     """Diagonal GAS-GARCH filter — negative average log-likelihood and log-variance surface.
 
+    The filter runs forward through all T days, updating the B-spline coefficient
+    vector b_t using the score of the multivariate Student-t likelihood.
+
     Parameters
     ----------
-    returns    : (n_grid, n_days) return matrix.
-    init_coefs : (n_basis, 1) initial coefficient vector.
-    basis_mat  : (n_basis, n_grid) B-spline basis matrix from cubic_bspline_basis.
-    params     : Parameter vector [nu, ou_scale, omega (n_basis), b (n_basis), a (n_basis)].
+    mY        : (n, T) return matrix.
+    vb_ini    : (M, 1) initial coefficient vector.
+    dK        : B-spline order parameter (M = dK + 1).
+    basis_mat : (M, n) B-spline basis matrix from cubic_bspline_basis.
+    vtheta    : Parameter vector [nu, delta, omega (M), b (M), a (M)], length 2 + 3M.
 
     Returns
     -------
     neg_avg_loglik : Scalar to minimise.
-    log_vol_surface : (n_grid, n_days) log-variance values log(sigma2_t(u_i)).
+    log_sigma2     : (n, T) matrix of log-variance values log(sigma2_t(u_i)).
     """
-    n_basis, n_grid = basis_mat.shape
-    n_days = returns.shape[1]
+    n, T = mY.shape
+    M    = dK + 1
+    nu       = vtheta[0]
+    ou_scale = vtheta[1]
+    omega = vtheta[2:     M + 2].reshape(M, 1)
+    vb    = vtheta[M + 2: 2*M + 2].reshape(M, 1)
+    va    = vtheta[2*M + 2:].reshape(M, 1)
 
-    nu       = params[0]
-    ou_scale = params[1]
-    omega    = params[2:      n_basis + 2].reshape(n_basis, 1)
-    b_diag   = params[n_basis + 2: 2 * n_basis + 2].reshape(n_basis, 1)
-    a_diag   = params[2 * n_basis + 2:].reshape(n_basis, 1)
-
-    cov_mat  = ou_kernel(np.linspace(0, 1, n_grid), delta=ou_scale)
+    cov_mat  = ou_kernel(np.linspace(0, 1, n), delta=ou_scale)
     cov_inv  = np.linalg.inv(cov_mat)
     log_det  = np.log(np.linalg.det(cov_mat))
-    nu_scale = (nu + n_grid) / (2 * nu)
+    nu_scale = (nu + n) / (2 * nu)
 
-    coef_vec        = init_coefs.copy()
-    returns_prev    = returns[:, 0].reshape(n_grid, 1)
-    log_vol_surface = np.zeros(returns.shape)
-    log_lik         = 0.0
+    vb_now     = vb_ini.copy()
+    vy_now     = mY[:, 0].reshape(n, 1)
+    log_sigma2 = np.zeros(mY.shape)
+    log_lik    = 0.0
 
-    for t in range(1, n_days):
-        log_vol = basis_mat.T @ coef_vec          # (n_grid, 1)
-        log_vol_surface[:, t] = log_vol[:, 0]
+    for t in range(1, T):
+        sigma_now = basis_mat.T @ vb_now       # (n, 1) — log sigma2_t at each grid point
+        log_sigma2[:, t] = sigma_now[:, 0]
 
-        std_dev   = np.exp(log_vol / 2)           # (n_grid, 1)
-        scale_inv = np.eye(n_grid) / std_dev      # diag(1/sigma_t)
+        S = np.exp(sigma_now / 2)              # (n, 1) — sigma_t (conditional std dev)
+        R = np.eye(n) / S                      # (n, n) — diag(1/sigma_t)
+        Y = vy_now                             # (n, 1) — returns on day t-1
 
-        student_denom = float(np.sum(
-            1 + returns_prev.T @ scale_inv @ cov_inv @ scale_inv @ returns_prev / nu
-        ))
-        score_a = (returns_prev / std_dev).T * basis_mat
-        score_b = score_a @ (cov_inv @ (scale_inv @ returns_prev))
+        A1 = float(np.sum(1 + Y.T @ R @ cov_inv @ R @ Y / nu))
+        A2 = (Y / S).T * basis_mat
+        A3 = A2 @ (cov_inv @ (R @ Y))
         score = (
             -0.5 * basis_mat.sum(axis=1, keepdims=True)
-            + (nu_scale / student_denom) * score_b
+            + (nu_scale / A1) * A3
         )
 
         if t > 5:
             log_lik += (
-                -0.5 * float(np.sum(log_vol))
-                - (n_grid + nu) / 2 * np.log(student_denom)
+                -0.5 * float(np.sum(sigma_now))
+                - (n + nu) / 2 * np.log(A1)
             )
 
-        coef_vec     = omega + b_diag * coef_vec + a_diag * score
-        returns_prev = returns[:, t].reshape(n_grid, 1)
+        vb_now = omega + vb * vb_now + va * score
+        vy_now = mY[:, t].reshape(n, 1)
 
-    log_lik += n_days * (
-        gammaln((nu + n_grid) / 2)
+    log_lik += T * (
+        gammaln((nu + n) / 2)
         - gammaln(nu / 2)
-        - (n_grid / 2) * np.log(np.pi * nu)
+        - (n / 2) * np.log(np.pi * nu)
         - 0.5 * log_det
     )
-    return -log_lik / n_days, log_vol_surface
+    return -log_lik / T, log_sigma2
 
 
 # ── estimation ────────────────────────────────────────────────────────────────
 
 def fit_gas(
-    returns: np.ndarray,
-    n_basis: int = N_BASIS,
+    mY: np.ndarray,
+    dK: int = DK,
     n_int_knots: int = N_INT_KNOTS,
     maxiter: int = MAXITER,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -178,107 +184,120 @@ def fit_gas(
 
     Returns
     -------
-    params_hat  : Estimated parameter vector, length 2 + 3*n_basis.
-    vol_surface : Estimated volatility surface (std dev = exp(log_sigma2 / 2)),
-                  shape (n_grid, n_days).
-    basis_mat   : (n_basis, n_grid) B-spline basis matrix used in estimation.
+    vtheta_hat : Estimated parameter vector, length 2 + 3M.
+    sigma_hat  : Estimated volatility surface (std dev = exp(log sigma2 / 2)),
+                 shape (n, T).
+    basis_mat  : (M, n) B-spline basis matrix used in estimation.
     """
-    n_grid = returns.shape[0]
-    grid = np.linspace(0, 1, n_grid)
-    spline_order = n_basis - 3          # order s.t. n_interior_knots + order - 1 + 1 = n_basis
-    basis_mat = cubic_bspline_basis(grid, order=spline_order, n_interior_knots=n_int_knots)
+    n = mY.shape[0]
+    M = dK + 1
+    vtau      = np.linspace(0, 1, n)
+    basis_mat = cubic_bspline_basis(vtau, order=dK - 2, n_interior_knots=n_int_knots)
 
-    init_coefs  = np.ones((n_basis, 1))
-    init_params = np.concatenate((
-        [2.1, 0.5], np.ones(n_basis), 0.5 * np.ones(n_basis), 0.05 * np.ones(n_basis)
+    vb0     = np.ones((M, 1))
+    vtheta0 = np.concatenate((
+        [2.1, 0.5], np.ones(M), 0.5 * np.ones(M), 0.05 * np.ones(M)
     ))
-    lower_bounds = np.concatenate(([1.05, 1e-5], -5 * np.ones(n_basis), -0.99 * np.ones(n_basis), -0.5 * np.ones(n_basis)))
-    upper_bounds = np.concatenate(([50,   1.0],  15 * np.ones(n_basis),  0.99 * np.ones(n_basis),  0.5 * np.ones(n_basis)))
+    LB = np.concatenate(([1.05, 1e-5], -5 * np.ones(M), -0.99 * np.ones(M), -0.5 * np.ones(M)))
+    UB = np.concatenate(([50,   1.0],  15 * np.ones(M),  0.99 * np.ones(M),  0.5 * np.ones(M)))
 
     call_count = [0]
 
-    def _objective(params: np.ndarray) -> float:
-        nll = _gas_filter(returns, init_coefs, basis_mat, params)[0]
+    def _objective(vtheta: np.ndarray) -> float:
+        nll = _gas_filter(mY, vb0, dK, basis_mat, vtheta)[0]
         call_count[0] += 1
         if call_count[0] % 25 == 0:
             print(f'  call {call_count[0]:>5d} | neg-log-lik: {nll:.6f}', end='\r')
         return nll
 
-    nll0 = _objective(init_params)
+    nll0 = _objective(vtheta0)
     print(f'Initial neg-log-lik: {nll0:.4f}')
 
-    result = minimize(
-        _objective, init_params,
-        bounds=list(zip(lower_bounds, upper_bounds)),
+    opt = minimize(
+        _objective, vtheta0,
+        bounds=list(zip(LB, UB)),
         method='SLSQP',
         options={'maxiter': maxiter, 'ftol': 1e-9},
     )
     print(
-        f'\nFinal   neg-log-lik: {result.fun:.4f}'
-        f'  |  converged: {result.success}'
-        f'  |  iters: {result.nit}'
+        f'\nFinal   neg-log-lik: {opt.fun:.4f}'
+        f'  |  converged: {opt.success}'
+        f'  |  iters: {opt.nit}'
     )
 
-    _, log_vol_surface = _gas_filter(returns, init_coefs, basis_mat, result.x)
-    vol_surface = np.exp(log_vol_surface / 2)   # log sigma2 -> sigma (std dev)
-    return result.x, vol_surface, basis_mat
+    _, log_sigma2_hat = _gas_filter(mY, vb0, dK, basis_mat, opt.x)
+    sigma_hat = np.exp(log_sigma2_hat / 2)
+    return opt.x, sigma_hat, basis_mat
 
 
 # ── goodness-of-fit ───────────────────────────────────────────────────────────
 
 def goodness_of_fit(
-    returns: np.ndarray,
-    vol_surface: np.ndarray,
-    true_variance: np.ndarray,
+    mY: np.ndarray,
+    sigma_hat: np.ndarray,
+    sigma2_true: np.ndarray,
     nu_hat: float,
     warmup: int = WARMUP,
 ) -> dict:
-    """Compute and print goodness-of-fit metrics."""
-    true_vol     = np.sqrt(true_variance[:, warmup:])
-    vol_hat      = vol_surface[:, warmup:]
-    std_residuals = (returns[:, warmup:] / vol_hat).ravel()
+    """Compute and print goodness-of-fit metrics.
 
-    rmse = np.sqrt(np.mean((vol_hat - true_vol) ** 2))
-    mae  = np.mean(np.abs(vol_hat - true_vol))
-    pearson_r = float(np.corrcoef(vol_hat.ravel(), true_vol.ravel())[0, 1])
-    r2 = 1 - np.sum((vol_hat - true_vol) ** 2) / np.sum((true_vol - true_vol.mean()) ** 2)
+    Metrics
+    -------
+    RMSE, MAE
+        Error of the estimated volatility std dev vs the true std dev.
+    Pearson r, R²
+        Correlation and explained variance between sigma_hat and sigma_true.
+    Mean z² vs E[z²] under t(nu)
+        Standardised residuals z = r / sigma_hat should satisfy
+        E[z²] ~= nu/(nu-2) under the Student-t model.
+    KS test
+        Kolmogorov-Smirnov test of z against t(nu_hat).
+    """
+    sigma_true = np.sqrt(sigma2_true[:, warmup:])
+    s_hat      = sigma_hat[:, warmup:]
+    z          = (mY[:, warmup:] / s_hat).ravel()
 
-    residual_var = float(np.mean(std_residuals ** 2))
-    t_dist_var   = nu_hat / (nu_hat - 2) if nu_hat > 2 else float('nan')
-    ks_stat, ks_pval = stats.kstest(std_residuals, stats.t(df=nu_hat).cdf)
+    rmse = np.sqrt(np.mean((s_hat - sigma_true) ** 2))
+    mae  = np.mean(np.abs(s_hat - sigma_true))
+    r    = float(np.corrcoef(s_hat.ravel(), sigma_true.ravel())[0, 1])
+    r2   = 1 - np.sum((s_hat - sigma_true) ** 2) / np.sum((sigma_true - sigma_true.mean()) ** 2)
+
+    resid_var = float(np.mean(z ** 2))
+    t_var     = nu_hat / (nu_hat - 2) if nu_hat > 2 else float('nan')
+    ks_stat, ks_pval = stats.kstest(z, stats.t(df=nu_hat).cdf)
 
     print('\n── Goodness-of-fit ─────────────────────────────────────────')
     print(f'  Volatility RMSE:                    {rmse:.4f}')
     print(f'  Volatility MAE:                     {mae:.4f}')
-    print(f'  Pearson r (vol_hat vs true_vol):    {pearson_r:.4f}')
-    print(f'  R²        (vol_hat vs true_vol):    {r2:.4f}')
-    print(f'  Mean z²  (E[z²] ~= {t_dist_var:.3f} under t(nu)): {residual_var:.4f}')
+    print(f'  Pearson r (sigma_hat vs sigma):     {r:.4f}')
+    print(f'  R²        (sigma_hat vs sigma):     {r2:.4f}')
+    print(f'  Mean z²  (E[z²] ~= {t_var:.3f} under t(nu)): {resid_var:.4f}')
     print(f'  KS stat / p-value:                  {ks_stat:.4f} / {ks_pval:.4f}')
     print('────────────────────────────────────────────────────────────')
 
     return dict(
-        rmse=rmse, mae=mae, pearson_r=pearson_r, r2=r2,
-        residual_var=residual_var, t_dist_var=t_dist_var,
+        rmse=rmse, mae=mae, pearson_r=r, r2=r2,
+        resid_var=resid_var, expected_var=t_var,
         ks_stat=ks_stat, ks_pval=ks_pval,
     )
 
 
 # ── plots ─────────────────────────────────────────────────────────────────────
 
-def plot_surfaces(vol_surface: np.ndarray, true_variance: np.ndarray, warmup: int = WARMUP) -> None:
+def plot_surfaces(sigma_hat: np.ndarray, sigma2_true: np.ndarray, warmup: int = WARMUP) -> None:
     """Side-by-side 3D surface plots: true vs estimated volatility."""
-    true_vol = np.sqrt(true_variance[:, warmup:])
-    vol_hat  = vol_surface[:, warmup:]
-    n_grid, n_days = vol_hat.shape
-    intraday_grid, day_grid = np.meshgrid(np.arange(n_grid), np.arange(n_days))
+    sigma_true = np.sqrt(sigma2_true[:, warmup:])
+    s_hat      = sigma_hat[:, warmup:]
+    n, T = s_hat.shape
+    X, Y = np.meshgrid(np.arange(n), np.arange(T))
 
     fig = plt.figure(figsize=(18, 7))
     for col, (surf, title) in enumerate([
-        (true_vol.T, 'True volatility  sigma_t(u)'),
-        (vol_hat.T,  'Estimated volatility  sigma_hat_t(u)'),
+        (sigma_true.T, 'True volatility  sigma_t(u)'),
+        (s_hat.T,      'Estimated volatility  sigma_hat_t(u)'),
     ]):
         ax = fig.add_subplot(1, 2, col + 1, projection='3d')
-        ax.plot_surface(intraday_grid, day_grid, surf, cmap=cm.plasma, alpha=0.85)
+        ax.plot_surface(X, Y, surf, cmap=cm.plasma, alpha=0.85)
         ax.set_xlabel('Intraday grid u', fontsize=11)
         ax.set_ylabel('Day t',           fontsize=11)
         ax.set_zlabel('Volatility',      fontsize=11)
@@ -291,23 +310,27 @@ def plot_surfaces(vol_surface: np.ndarray, true_variance: np.ndarray, warmup: in
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # 1. Simulate
     print('── Simulating data ──────────────────────────────────────────')
-    returns, true_variance = simulate_vol_surface(N_GRID, N_DAYS, seed=SEED)
-    print(f'Return matrix shape  : {returns.shape}')
-    print(f'True variance range  : [{true_variance.min():.2f}, {true_variance.max():.2f}]')
+    mY, sigma2_true = simulate_vol_surface(N_GRID, N_DAYS, seed=SEED)
+    print(f'Return matrix shape : {mY.shape}')
+    print(f'True σ² range       : [{sigma2_true.min():.2f}, {sigma2_true.max():.2f}]')
 
+    # 2. Estimate
     print('\n── Estimating diagonal GAS-GARCH ────────────────────────────')
-    params_hat, vol_surface, basis_mat = fit_gas(returns)
+    vtheta_hat, sigma_hat, basis_mat = fit_gas(mY)
 
-    nu_hat      = params_hat[0]
-    ou_scale_hat = params_hat[1]
-    print(f'\nEstimated ν (Student-t df):  {nu_hat:.3f}')
-    print(f'Estimated δ (OU scale):      {ou_scale_hat:.5f}')
+    nu_hat    = vtheta_hat[0]
+    delta_hat = vtheta_hat[1]
+    print(f'\nEstimated ν (Student-t df): {nu_hat:.3f}')
+    print(f'Estimated δ (OU scale):     {delta_hat:.5f}')
 
-    metrics = goodness_of_fit(returns, vol_surface, true_variance, nu_hat)
+    # 3. Goodness-of-fit metrics
+    metrics = goodness_of_fit(mY, sigma_hat, sigma2_true, nu_hat)
 
+    # 4. Plot
     print('\n── Plotting ─────────────────────────────────────────────────')
-    plot_surfaces(vol_surface, true_variance)
+    plot_surfaces(sigma_hat, sigma2_true)
 
 
 if __name__ == '__main__':
