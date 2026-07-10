@@ -16,35 +16,55 @@ The conditional variance curve on day $t$ given the filtration $\mathcal{F}_{t-1
 
 ### Functional GARCH
 
-The **functional GARCH(1,1)** model specifies:
+The **functional GARCH(p,q)** model of Cerovecki, Francq, Hörmann & Zakoïan (2018) specifies (Definitions 1, eq. 2.1–2.2):
 
-$$r_t(u) = \sigma_t(u)\,\varepsilon_t(u), \quad \varepsilon_t \overset{iid}{\sim} (0, \mathrm{Id})$$
+$$y_t = \sigma_t \eta_t, \qquad (\eta_t)_{t \in \mathbb{Z}} \overset{iid}{\sim} H, \quad \mathbb{E}[\eta_t(u)] = 0,\ \mathbb{E}[\eta_t^2(u)] = 1$$
 
-$$\sigma_t^2(u) = \delta(u) + \int_0^1 \alpha(u,s)\,r_{t-1}^2(s)\,ds + \int_0^1 \beta(u,s)\,\sigma_{t-1}^2(s)\,ds$$
+$$\sigma_t^2 = \delta + \sum_{i=1}^{q} \alpha_i\!\left(y_{t-i}^2\right) + \sum_{j=1}^{p} \beta_j\!\left(\sigma_{t-j}^2\right)$$
 
-where:
-- $\delta \in L^2[0,1]$ is the **level function** (unconditional variance shape).
-- $\alpha, \beta \in L^2([0,1]^2)$ are **kernel operators** governing shock transmission and persistence across intraday times.
+where $H = L^2[0,1]$, multiplication $y_t = \sigma_t \eta_t$ is pointwise, $\delta \in H^+_*$ is the **intercept curve**, and $\alpha_1,\ldots,\alpha_q,\,\beta_1,\ldots,\beta_p \in K^+(H)$ are **positive kernel operators**. For a kernel operator $\alpha \in K^+(H)$ with kernel $K_\alpha$:
 
-#### Bernstein Basis
+$$[\alpha(x)](u) = \int_0^1 K_\alpha(u, v)\, x(v)\, dv, \qquad K_\alpha(u,v) \geq 0$$
 
-The kernel operators and level function are approximated in a finite-dimensional **Bernstein polynomial basis** $\{\varphi_k^M\}_{k=1}^M$:
+#### Stationarity
 
-$$\varphi_k^M(u) = \binom{M-1}{k-1} u^{k-1}(1-u)^{M-k}, \quad u \in [0,1]$$
+A sufficient condition for the existence of a unique strictly stationary, non-anticipative solution is that the top Lyapunov exponent of the companion operator sequence satisfies $\gamma < 0$ (Theorem 1). For GARCH(1,1) this reduces to (Proposition 1):
 
-The basis satisfies $\sum_{k=1}^M \varphi_k^M(u) = 1$ (partition of unity) and $\varphi_k^M(u) \geq 0$. The parametrisation is:
+$$\mathbb{E}\log\bigl\|\!\left(\alpha\Upsilon_{t-1} + \beta\right)\cdots\left(\alpha\Upsilon_1 + \beta\right)\!\bigr\| < 0$$
 
-$$\delta(u) = \sum_{k=1}^M c_k\,\varphi_k^M(u), \qquad \alpha(u,s) = \sum_{k=1}^M \sum_{l=1}^M a_{kl}\,\varphi_k^M(u)\,\varphi_l^M(s)$$
+where $\Upsilon_t$ is the pointwise multiplication operator by $\eta_t^2$.
 
-with an identical expansion for $\beta$. The full parameter vector is $\theta = (c_{1:M},\, a_{11:MM},\, b_{11:MM}) \in \mathbb{R}^{M + 2M^2}$.
+#### Bernstein Parametrisation
 
-#### Estimation
+Let $\varphi_1,\ldots,\varphi_M \in H^+$ be linearly independent non-negative **instrumental functions** (Section 3.1). The functional parameters are expanded as (eq. 3.2):
 
-Parameters are estimated by minimising the **Bernstein-projected MSE**:
+$$\delta = \sum_{k=1}^M d_k\,\varphi_k, \qquad \alpha_i = \sum_{k,\ell=1}^M a_{k\ell}^{(i)}\,\varphi_k \otimes \varphi_\ell, \qquad \beta_j = \sum_{k,\ell=1}^M b_{k\ell}^{(j)}\,\varphi_k \otimes \varphi_\ell$$
 
-$$\hat{\theta} = \arg\min_\theta \sum_{t=2}^T \sum_{k=1}^M \left\|\left(r_t^2 - \sigma_t^2(\cdot\,;\theta)\right)\varphi_k^M\right\|_{L^2}^2$$
+where $(\varphi_k \otimes \varphi_\ell)(x) = \varphi_k\langle x, \varphi_\ell\rangle$ is the rank-one operator. This ensures $\alpha_i, \beta_j \in K^+(H)$ when all coefficients are non-negative. The full parameter vector is (eq. 3.3):
 
-where $\|f\|_{L^2}^2 = \int_0^1 f(u)^2\,du$. This is equivalent to weighting the squared residual $(r_t^2 - \sigma_t^2)^2$ by $(\varphi_k^M)^2$ and integrating, approximated on a uniform intraday grid of length $N$. Optimisation uses `scipy.minimize` with SLSQP.
+$$\theta = \mathrm{vec}\!\left(d,\, A_1,\ldots,A_q,\, B_1,\ldots,B_p\right) \in \mathbb{R}^{M + (p+q)M^2}$$
+
+The implementation uses **Bernstein polynomials** as instrumental functions (Section 3.3, Example 2):
+
+$$\varphi_k^M(u) = \binom{M-1}{k-1} u^{k-1}(1-u)^{M-k}, \quad k = 1,\ldots,M,\quad u \in [0,1]$$
+
+satisfying $\sum_{k=1}^M \varphi_k^M(u) = 1$ and $\varphi_k^M(u) \geq 0$.
+
+#### QMLE Estimation
+
+Parameters are estimated by the **Quasi-Maximum Likelihood Estimator** (QMLE) of Cerovecki et al. (2018), defined by (eq. 3.4–3.5):
+
+$$\hat{\theta}_n = \arg\min_{\theta \in \Theta}\; \tilde{Q}_n(\theta), \qquad \tilde{Q}_n(\theta) = \frac{1}{n}\sum_{t=1}^n \tilde{\ell}_t(\theta)$$
+
+$$\tilde{\ell}_t(\theta) = \sum_{m=1}^M \left(\frac{\langle y_t^2,\, \varphi_m \rangle}{\langle \tilde{\sigma}_t^2,\, \varphi_m \rangle} + \log\langle \tilde{\sigma}_t^2,\, \varphi_m \rangle\right)$$
+
+where $\langle f, g \rangle = \int_0^1 f(u)g(u)\,du$ is the $L^2[0,1]$ inner product and $\tilde{\sigma}_t^2$ is the empirical volatility recursed from initial values (eq. 3.6):
+
+$$\tilde{\sigma}_t^2 = \delta + \sum_{i=1}^q \alpha_i(y_{t-i}^2) + \sum_{j=1}^p \beta_j(\tilde{\sigma}_{t-j}^2)$$
+
+This criterion is inspired by the scalar GARCH QMLE ($r_t^2/\sigma_t^2 + \log\sigma_t^2$) and is strongly consistent (Theorem 2) and asymptotically normal (Theorem 3) under mild regularity conditions. In particular, the distribution of $\eta_t$ need not be specified.
+
+> **Note:** The current code (`loss_func` in `garch.py`) implements a Bernstein-projected MSE approximation rather than the QMLE criterion above. The inner product $\langle f, g \rangle$ is approximated by the sample mean $\frac{1}{N}\sum_{i=1}^N f(u_i)g(u_i)$ on a uniform grid of $N$ points. Optimisation uses `scipy.minimize` with SLSQP.
 
 ---
 
@@ -248,6 +268,8 @@ pytest tests/
 
 ## References
 
+- Cerovecki, C., Francq, C., Hörmann, S., & Zakoïan, J.-M. (2018). Functional GARCH models: the quasi-likelihood approach and its applications. MPRA Paper No. 83990.
 - Aue, A., Norinho, D. D., & Hörmann, S. (2015). On the prediction of stationary functional time series. *Journal of the American Statistical Association*, 110(509), 378–392.
+- Aue, A., Hörmann, S., & Klepsch, J. (2016). Estimating functional GARCH-type models. Preprint.
 - Hörmann, S., Kidziński, Ł., & Hallin, M. (2015). Dynamic functional principal components. *Journal of the Royal Statistical Society: Series B*, 77(2), 319–348.
 - Creal, D., Koopman, S. J., & Lucas, A. (2013). Generalized autoregressive score models with applications. *Journal of Applied Econometrics*, 28(5), 777–795.
