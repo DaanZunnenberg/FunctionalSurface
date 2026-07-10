@@ -18,9 +18,9 @@ The conditional variance curve on day $t$ given the filtration $\mathcal{F}_{t-1
 
 The **functional GARCH(p,q)** model of Cerovecki, Francq, Hörmann & Zakoïan (2018) specifies (Definitions 1, eq. 2.1–2.2):
 
-$$y_t = \sigma_t \eta_t, \qquad (\eta_t)_{t \in \mathbb{Z}} \overset{iid}{\sim} H, \quad \mathbb{E}[\eta_t(u)] = 0,\ \mathbb{E}[\eta_t^2(u)] = 1$$
+$$y_t = \sigma_t \eta_t, \qquad (\eta_t)_{t \in \mathbb{Z}} \stackrel{\text{iid}}{\sim} H, \quad \mathbb{E}[\eta_t(u)] = 0, \quad \mathbb{E}[\eta_t^2(u)] = 1$$
 
-$$\sigma_t^2 = \delta + \sum_{i=1}^{q} \alpha_i\!\left(y_{t-i}^2\right) + \sum_{j=1}^{p} \beta_j\!\left(\sigma_{t-j}^2\right)$$
+$$\sigma_t^2 = \delta + \sum_{i=1}^{q} \alpha_i(y_{t-i}^2) + \sum_{j=1}^{p} \beta_j(\sigma_{t-j}^2)$$
 
 where $H = L^2[0,1]$, multiplication $y_t = \sigma_t \eta_t$ is pointwise, $\delta \in H^+_*$ is the **intercept curve**, and $\alpha_1,\ldots,\alpha_q,\,\beta_1,\ldots,\beta_p \in K^+(H)$ are **positive kernel operators**. For a kernel operator $\alpha \in K^+(H)$ with kernel $K_\alpha$:
 
@@ -30,7 +30,7 @@ $$[\alpha(x)](u) = \int_0^1 K_\alpha(u, v)\, x(v)\, dv, \qquad K_\alpha(u,v) \ge
 
 A sufficient condition for the existence of a unique strictly stationary, non-anticipative solution is that the top Lyapunov exponent of the companion operator sequence satisfies $\gamma < 0$ (Theorem 1). For GARCH(1,1) this reduces to (Proposition 1):
 
-$$\mathbb{E}\log\bigl\|\!\left(\alpha\Upsilon_{t-1} + \beta\right)\cdots\left(\alpha\Upsilon_1 + \beta\right)\!\bigr\| < 0$$
+$$\mathbb{E}\log\left\|(\alpha\Upsilon_{t-1} + \beta)\cdots(\alpha\Upsilon_1 + \beta)\right\| < 0$$
 
 where $\Upsilon_t$ is the pointwise multiplication operator by $\eta_t^2$.
 
@@ -42,7 +42,7 @@ $$\delta = \sum_{k=1}^M d_k\,\varphi_k, \qquad \alpha_i = \sum_{k,\ell=1}^M a_{k
 
 where $(\varphi_k \otimes \varphi_\ell)(x) = \varphi_k\langle x, \varphi_\ell\rangle$ is the rank-one operator. This ensures $\alpha_i, \beta_j \in K^+(H)$ when all coefficients are non-negative. The full parameter vector is (eq. 3.3):
 
-$$\theta = \mathrm{vec}\!\left(d,\, A_1,\ldots,A_q,\, B_1,\ldots,B_p\right) \in \mathbb{R}^{M + (p+q)M^2}$$
+$$\theta = \mathrm{vec}\left(d,\ A_1,\ldots,A_q,\ B_1,\ldots,B_p\right) \in \mathbb{R}^{M + (p+q)M^2}$$
 
 The implementation uses **Bernstein polynomials** as instrumental functions (Section 3.3, Example 2):
 
@@ -86,11 +86,11 @@ where $s_{t-1}$ is the **score** of the conditional log-likelihood with respect 
 
 The return vector $r_t \in \mathbb{R}^N$ is modelled as a multivariate Student-$t$ with $\nu$ degrees of freedom:
 
-$$r_t \mid \mathcal{F}_{t-1} \sim t_\nu\!\left(0,\, S_t \Lambda_\delta S_t\right)$$
+$$r_t \mid \mathcal{F}_{t-1} \sim t_\nu\left(0,\ S_t \Lambda_\delta S_t\right)$$
 
 where $S_t = \mathrm{diag}(\exp(\sigma_t(u_i)/2))_{i=1}^N$ scales individual volatilities and $\Lambda_\delta$ is an **Ornstein-Uhlenbeck covariance kernel**:
 
-$$[\Lambda_\delta]_{ij} = \exp\!\left(-\frac{|u_i - u_j|}{\delta}\right)$$
+$$[\Lambda_\delta]_{ij} = \exp\left(-\frac{|u_i - u_j|}{\delta}\right)$$
 
 This captures the intraday autocorrelation structure with a single length-scale parameter $\delta$.
 
@@ -98,7 +98,7 @@ This captures the intraday autocorrelation structure with a single length-scale 
 
 Let $\tilde{r}_t = S_t^{-1} r_t$ be the element-wise standardised returns and $A_1 = 1 + \tilde{r}_t^\top \Lambda_\delta^{-1} \tilde{r}_t\,/\,\nu$ the scalar quadratic form. The score of the log-likelihood with respect to $b_t$ is:
 
-$$s_t = -\frac{1}{2}\,\Phi\,\mathbf{1}_N + \frac{\nu + N}{2\nu\,A_1}\,\Phi\,\bigl(\tilde{r}_t \odot \Lambda_\delta^{-1}\tilde{r}_t\bigr)$$
+$$s_t = -\frac{1}{2}\,\Phi\,\mathbf{1}_N + \frac{\nu + N}{2\nu A_1}\,\Phi\left(\tilde{r}_t \odot \Lambda_\delta^{-1}\tilde{r}_t\right)$$
 
 where $\Phi = [\Phi(u_1)\;\cdots\;\Phi(u_N)]$ is the $(M \times N)$ basis matrix and $\odot$ denotes element-wise multiplication. Parameters $(\nu, \delta, \omega, B, A)$ are estimated by maximising the average log-likelihood.
 
