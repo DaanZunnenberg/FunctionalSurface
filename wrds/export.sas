@@ -1,12 +1,18 @@
-/*        set the libname myhome variable to the local folder                                  */
-/*        this folder has string geometry '/home/university/name                               */
-/*        the queried data is from data_fetcher.sas is stored using the alias tempx            */
-/*        hence, to download the data, set the output file to /home/univ/user/data_alias.csv   */
+/*        set the output_path macro variable to your local WRDS project folder                */
+/*        this folder has string geometry '/home/university/name'                              */
+/*        the queried data from data_fetcher.sas is stored using the alias tempx               */
+/*        hence, to download the data, it is exported to &output_path./data_alias.csv          */
 
-libname myHome '/home/univ/user';
+/****** Input area (users should modify this area) **************************/
+%let output_path = /home/univ/user; * your local WRDS project folder;
+%let output_file = data_alias;      * output CSV file name (without extension);
+
+/****** End of input area **********************/
+
+libname myHome "&output_path.";
 
 proc export data=work.tempx
-	outfile='/home/univ/user/data_alias.csv'
+	outfile="&output_path./&output_file..csv"
   dbms=csv
   replace;
 run;

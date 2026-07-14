@@ -1,26 +1,35 @@
+/****** Input area (users should modify this area) **************************/
 /* Enter your WRDS institution name and your WRDS username */
-libname project '/home/vu/njseeger/sasoutput'; 
-options errors=2;
-
-%let path=/home/vu/njseeger/sasoutput;
+%let wrds_institution = vu;
+%let wrds_username = %sysget(USER);   * defaults to the OS login of the account running SAS;
+%let path=/home/&wrds_institution./&wrds_username./sasoutput;
 %let interval_seconds = 1*60; /* 1 min */
 %let start_time = '4:00:00.000000000't; /* starting time; */
+%let tickers = 'SPY';
+%let start_year = 2015;
+%let end_year = 2023;
 
-libname nbbo '/wrds/nyse/sasdata/taqms/nbbo';
-libname cq '/wrds/nyse/sasdata/taqms/cq';
-libname ct '/wrds/nyse/sasdata/taqms/ct';
+%let nbbo_libpath = /wrds/nyse/sasdata/taqms/nbbo;
+%let cq_libpath = /wrds/nyse/sasdata/taqms/cq;
+%let ct_libpath = /wrds/nyse/sasdata/taqms/ct;
+
+/****** End of input area **********************/
+
+libname project "&path.";
+options errors=2;
+
+libname nbbo "&nbbo_libpath.";
+libname cq "&cq_libpath.";
+libname ct "&ct_libpath.";
 
 
 %MACRO LOOP();
 
-%DO J=2015 %TO 2023;
+%DO J=&start_year. %TO &end_year.;
 	%DO M=1 %TO 12;
 		%let month = %sysfunc(putn(&M,Z2.));
 
 	    /* STEP 1: RETRIEVE DAILY TRADE AND QUOTE (DTAQ) FILES */
-	    /*libname nbbo '/wrds/nyse/sasdata/taqms/nbbo';
-	    libname cq '/wrds/nyse/sasdata/taqms/cq';
-	    libname ct '/wrds/nyse/sasdata/taqms/ct';*/
 
 	    /* Retrieve NBBO data */
 	    data DailyNBBO;
@@ -31,7 +40,7 @@ libname ct '/wrds/nyse/sasdata/taqms/ct';
 	        /*set nbbo.nbbom_&J.:;*/
 
 			/* Enter company tickers you want */
-	        where sym_root in ('SPY') 
+	        where sym_root in (&tickers.) 
 
 			/* This selects common stocks only */
 	        and sym_suffix = '';
@@ -59,7 +68,7 @@ libname ct '/wrds/nyse/sasdata/taqms/ct';
 	        /*set cq.cqm_&J.:;*/
 
 			/* Enter the same company tickers as above */
-	        where sym_root in ('SPY') 
+	        where sym_root in (&tickers.) 
 
 			/* This selects common stocks only */
 	        and sym_suffix = '';

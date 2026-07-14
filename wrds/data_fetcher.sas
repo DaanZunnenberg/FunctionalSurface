@@ -60,21 +60,25 @@
 
 options nosource nodate nocenter nonumber ps=max ls=72;
 
-/****** Input area **************************/
-libname taqms '/wrds/nyse/sasdata/taqms/ct';
+/****** Input area (users should modify this area) **************************/
+%let taqms_libpath = /wrds/nyse/sasdata/taqms/ct; * WRDS millisecond TAQ trade library;
+libname taqms "&taqms_libpath.";
 %let taq_ds=taqms.ctm_2019:;        * the taqms.ctm_2019: dataset contains all data from 2019
+%let tickers = 'AAPL';              * comma-separated list of sym_root values to keep;
+%let session_start_time = '9:30:00't;  * regular trading session start;
+%let session_end_time = '16:30:00't;   * regular trading session end;
 %let start_time_m = '9:30:00't;    * starting time_m;
 %let interval_seconds =15*60;    * interval is 15*60 seconds (15 minutes);
- 
+
 /****** End of input area **********************/
- 
- 
-/* Extract data for one day for 3 stocks, we consider the time_m
-  between  9:30am to 4:30pm,  only retrieve SYM_ROOT SYM_SUFFIX DATE TIME_M and PRICE; */
+
+
+/* Extract data for the configured tickers, we consider the time_m
+  between the configured session start/end,  only retrieve SYM_ROOT SYM_SUFFIX DATE TIME_M and PRICE; */
 data tempx;
      set &taq_ds(keep=sym_root sym_suffix date time_m price);
-     where sym_root in ('AAPL') and sym_suffix=' '
-     and time_m between '9:30:00't and '16:30:00't;
+     where sym_root in (&tickers.) and sym_suffix=' '
+     and time_m between &session_start_time. and &session_end_time.;
      by sym_root sym_suffix date time_m;
      retain itime_m rtime_m iprice; *Carry time and price values forward;
         format itime_m time12. rtime_m time12.9; * if you only need second timestamp, use 'time12.' instead.;
