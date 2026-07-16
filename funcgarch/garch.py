@@ -305,14 +305,23 @@ def fit(
 
 
 if __name__ == '__main__':
+    import argparse
     import pandas as pd
     import matplotlib.pyplot as plt
 
+    parser = argparse.ArgumentParser(description='Functional GARCH demo')
+    parser.add_argument('--data-path', default='../price_data_example.csv',
+                         help='Path to CSV with a "date" index column and an "open" price column')
+    parser.add_argument('--start-date', default='2023-12-14', help='Start date for the sample window')
+    parser.add_argument('--end-date', default='2024-02-22', help='End date for the sample window')
+    parser.add_argument('--resample', default='300S', help='Pandas resample rule for the price series')
+    args = parser.parse_args()
+
     prices = (
-        pd.read_csv('../price_data_example.csv', parse_dates=True, index_col='date')
+        pd.read_csv(args.data_path, parse_dates=True, index_col='date')
         .open
-        .loc['2023-12-14':'2024-02-22']
-        .resample('300S').last()
+        .loc[args.start_date:args.end_date]
+        .resample(args.resample).last()
     )
     log_returns = 100 * np.log(prices[1:] / prices[:-1].values)
     n_grid, n_days = int(len(log_returns) / 70), 70
