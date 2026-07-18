@@ -74,4 +74,86 @@ where $\Phi$ is the $(M \times N)$ basis matrix and $\odot$ denotes the Hadamard
 
 ---
 
+## Setup
+
+```bash
+git clone https://github.com/DaanZunnenberg/FunctionalScale.git
+cd FunctionalScale
+pip install -e .            # editable install, pulls in numpy/scipy/numba/pandas/matplotlib/tqdm
+pip install -e ".[dev]"      # + pytest, jupyter (optional, for tests/notebooks)
+```
+
+Requires Python >= 3.9.
+
+---
+
+## Usage
+
+### Functional GARCH
+
+```python
+import numpy as np
+from funcgarch import fit, garch_filter
+
+# mY: (N, T) matrix of intraday return curves — N grid points per day, T days
+mY = np.load("returns.npy")
+N, T = mY.shape
+M = 4  # number of Bernstein basis functions
+
+result = fit(mY, n_grid=N, M=M)          # QMLE-style estimation (scipy.optimize)
+vtheta_hat = result.x
+
+sigma2 = garch_filter(mY, n_grid=N, vtheta=vtheta_hat, M=M)  # (N, T) fitted variance surface
+```
+
+### Functional GAS-GARCH
+
+```python
+from scipy.optimize import minimize
+from funcgarch import gas_garch_estimator
+
+# vtheta = [nu, ou_scale, omega (M,), vec(B) (M*M,), vec(A) (M*M,)]
+result = minimize(
+    gas_garch_estimator, x0=vtheta_init, args=(mY, N, M),
+    method="SLSQP",
+)
+```
+
+### Data pipeline (WRDS TAQ -> clean returns)
+
+```bash
+# 1. Pull raw TAQ data via SAS (see wrds/data_fetcher.sas)
+# 2. Clean into an intraday return matrix
+python -m scripts.taq_cleaner --parent-path /path/to/taq/exports
+```
+
+```python
+from data.taq_cleaner import DataCleaner
+
+cleaner = DataCleaner(ticker="SPY")
+mY = cleaner.clean(parent_path="/path/to/taq/exports")  # -> (N, T) return matrix
+```
+
+---
+
+## Data Flow
+
+```
+wrds/*.sas                    scripts/taq_cleaner.py           funcgarch/*.py
+┌────────────────┐            ┌───────────────────┐           ┌─────────────────────┐
+│ WRDS TAQ pull   │  raw CSV  │ DataCleaner.clean()│  mY (N,T) │ fit() / garch_filter │
+│ (data_fetcher,  │ ────────► │  - align to grid   │ ────────► │ gas_garch_estimator  │
+│  taq_cleaner,   │           │  - compute returns │           │ func_garch_estimator │
+│  nbbo/dynamic_  │           │  - reshape to      │           │                      │
+│  taq_minute,    │           │    (N, T) matrix   │           │  -> vtheta_hat,      │
+│  export)        │           │                    │           │     sigma2 surface   │
+└────────────────┘            └───────────────────┘           └─────────────────────┘
+```
+
+Dependency direction: `funcgarch` (core package) has no dependency on `data/` or `wrds/` — it only
+consumes an `(N, T)` return matrix. The `data/taq_cleaner.py` pipeline depends on raw output from the
+`wrds/*.sas` scripts. `examples/*.ipynb` depend on both `funcgarch` and pre-cleaned data.
+
+---
+
 ## Repository Layout
