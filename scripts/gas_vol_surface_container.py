@@ -43,14 +43,13 @@ BG_PANEL   = '#0c1830'   # --blue-950
 LINE_SOFT  = '#232d47'   # hero border
 INK        = '#e7ebf5'   # near-white text on dark bg
 INK_FAINT  = '#8f9ab3'
-TERM_GREEN = '#3cff5e'   # --term-green — "true" surface
-TERM_BLUE  = '#4dd2ff'   # --term-blue  — "estimated" surface
 MONO_FONT  = ['SF Mono', 'IBM Plex Mono', 'Menlo', 'Consolas', 'monospace']
 
-_TRUE_CMAP = LinearSegmentedColormap.from_list(
-    'site-green', [BG_PANEL, '#1f7a4d', TERM_GREEN])
-_HAT_CMAP  = LinearSegmentedColormap.from_list(
-    'site-blue',  [BG_PANEL, '#1f5fa8', TERM_BLUE])
+# Shared blue-red diverging hue, used for both the true and the estimated
+# surface (so color encodes volatility level consistently across the two
+# panels, rather than one color per panel).
+_VOL_CMAP = LinearSegmentedColormap.from_list(
+    'site-blue-red', ['#2e6fdb', '#7b6fd9', '#e0507a', '#ff5b4d'])
 
 plt.rcParams['font.family'] = MONO_FONT
 plt.rcParams['text.color']  = INK
@@ -91,14 +90,20 @@ def plot_surfaces(
     rcount = T
     ccount = n
 
+    # Shared value range so the same color always encodes the same
+    # volatility level on both panels, not just within each panel.
+    vmin = min(sigma_true.min(), s_hat.min())
+    vmax = max(sigma_true.max(), s_hat.max())
+
     fig = plt.figure(figsize=(16, 6.4), facecolor=BG_950)
-    for col, (surf, title, cmap) in enumerate([
-        (sigma_true.T, 'True volatility  $\\sigma_t(u)$',       _TRUE_CMAP),
-        (s_hat.T,      'Estimated volatility  $\\hat\\sigma_t(u)$', _HAT_CMAP),
+    for col, (surf, title) in enumerate([
+        (sigma_true.T, 'True volatility  $\\sigma_t(u)$'),
+        (s_hat.T,      'Estimated volatility  $\\hat\\sigma_t(u)$'),
     ]):
         ax = fig.add_subplot(1, 2, col + 1, projection='3d', facecolor=BG_950)
         ax.plot_surface(
-            X, Y, surf, cmap=cmap, alpha=0.92, linewidth=0, antialiased=True,
+            X, Y, surf, cmap=_VOL_CMAP, vmin=vmin, vmax=vmax,
+            alpha=0.92, linewidth=0, antialiased=True,
             rcount=rcount, ccount=ccount,
         )
 
