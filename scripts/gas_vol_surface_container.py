@@ -62,6 +62,68 @@ plt.rcParams['ytick.color'] = INK_FAINT
 
 # ── plots ─────────────────────────────────────────────────────────────────────
 
+def plot_two_surfaces(
+    sigma_left: np.ndarray,
+    sigma_right: np.ndarray,
+    title_left: str,
+    title_right: str,
+    warmup: int = WARMUP,
+    out_path: str = 'two_surfaces.png',
+    suptitle: str = '',
+) -> None:
+    """Side-by-side 3D surface plots of two arbitrary (already sigma-scale)
+    volatility surfaces, site-themed — e.g. two different estimators
+    compared against each other rather than against the true surface."""
+    left  = sigma_left[:, warmup:]
+    right = sigma_right[:, warmup:]
+
+    block = 4
+    T_full = left.shape[1]
+    T_trim = (T_full // block) * block
+    left  = left[:, :T_trim].reshape(left.shape[0], -1, block).mean(axis=2)
+    right = right[:, :T_trim].reshape(right.shape[0], -1, block).mean(axis=2)
+
+    n, T = left.shape
+    X, Y = np.meshgrid(np.arange(n), np.arange(T) * block)
+    rcount = T
+    ccount = n
+
+    vmin = min(left.min(), right.min())
+    vmax = max(left.max(), right.max())
+
+    fig = plt.figure(figsize=(16, 6.4), facecolor=BG_950)
+    for col, (surf, title) in enumerate([
+        (left.T,  title_left),
+        (right.T, title_right),
+    ]):
+        ax = fig.add_subplot(1, 2, col + 1, projection='3d', facecolor=BG_950)
+        ax.plot_surface(
+            X, Y, surf, cmap=_VOL_CMAP, vmin=vmin, vmax=vmax,
+            alpha=0.92, linewidth=0, antialiased=True,
+            rcount=rcount, ccount=ccount,
+        )
+
+        ax.set_xlabel('Intraday grid  u', fontsize=11, labelpad=10)
+        ax.set_ylabel('Day  t',            fontsize=11, labelpad=10)
+        ax.set_zlabel('Volatility',        fontsize=11, labelpad=10)
+        ax.set_title(title, fontsize=13, color=INK, pad=14)
+
+        ax.xaxis.set_pane_color((0, 0, 0, 0))
+        ax.yaxis.set_pane_color((0, 0, 0, 0))
+        ax.zaxis.set_pane_color((0, 0, 0, 0))
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis._axinfo['grid']['color'] = LINE_SOFT
+            axis._axinfo['grid']['linewidth'] = 0.4
+        ax.tick_params(colors=INK_FAINT, labelsize=9)
+
+    fig.suptitle(suptitle, fontsize=14, color=INK, y=1.02)
+    plt.tight_layout()
+    fig.subplots_adjust(wspace=-0.35)
+    fig.savefig(out_path, dpi=220, facecolor=BG_950, bbox_inches='tight', pad_inches=0.35)
+    plt.close(fig)
+    print(f'Saved themed surface comparison to {out_path}')
+
+
 def plot_surfaces(
     sigma_hat: np.ndarray,
     sigma2_true: np.ndarray,
