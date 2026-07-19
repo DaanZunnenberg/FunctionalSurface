@@ -67,6 +67,7 @@ def plot_surfaces(
     sigma2_true: np.ndarray,
     warmup: int = WARMUP,
     out_path: str = 'gas_vol_surface_container.png',
+    suptitle: str = 'Volatility surface: true versus GAS-estimate',
 ) -> None:
     """Side-by-side 3D surface plots: true vs estimated volatility, site-themed."""
     sigma_true = np.sqrt(sigma2_true[:, warmup:])
@@ -122,7 +123,7 @@ def plot_surfaces(
         ax.tick_params(colors=INK_FAINT, labelsize=9)
 
     fig.suptitle(
-        'Volatility surface: true versus GAS-estimate',
+        suptitle,
         fontsize=14, color=INK, y=1.02,
     )
     plt.tight_layout()
