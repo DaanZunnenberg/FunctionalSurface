@@ -45,11 +45,12 @@ INK        = '#e7ebf5'   # near-white text on dark bg
 INK_FAINT  = '#8f9ab3'
 MONO_FONT  = ['SF Mono', 'IBM Plex Mono', 'Menlo', 'Consolas', 'monospace']
 
-# Shared blue-red diverging hue, used for both the true and the estimated
-# surface (so color encodes volatility level consistently across the two
-# panels, rather than one color per panel).
+# Shared purple-to-yellow hue (classical plasma-style palette), used for
+# both the true and the estimated surface (so color encodes volatility
+# level consistently across the two panels, rather than one color per
+# panel).
 _VOL_CMAP = LinearSegmentedColormap.from_list(
-    'site-blue-red', ['#2e6fdb', '#7b6fd9', '#e0507a', '#ff5b4d'])
+    'site-purple-yellow', ['#3b0f70', '#8c2981', '#de4968', '#fe9f6d', '#fcfdbf'])
 
 plt.rcParams['font.family'] = MONO_FONT
 plt.rcParams['text.color']  = INK
