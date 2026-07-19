@@ -128,7 +128,7 @@ def plot_surfaces(
     )
     plt.tight_layout()
     fig.subplots_adjust(wspace=-0.35)
-    fig.savefig(out_path, dpi=220, facecolor=BG_950, bbox_inches='tight')
+    fig.savefig(out_path, dpi=220, facecolor=BG_950, bbox_inches='tight', pad_inches=0.35)
     plt.close(fig)
     print(f'Saved themed surface comparison to {out_path}')
 
